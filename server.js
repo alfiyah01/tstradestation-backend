@@ -361,29 +361,71 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.post('/api/bootstrap/admin', async (req, res) => {
+// TAMBAHKAN ENDPOINT DEBUGGING SUPER DETAIL KE server.js
+// Letakkan setelah endpoint /api/health
+
+// 1. ENDPOINT UNTUK CEK DATABASE CONNECTION & CREATE ADMIN PAKSA
+app.get('/api/debug/force-admin', async (req, res) => {
   try {
-    console.log('🚀 Bootstrap: Creating admin user...');
+    console.log('🔍 FORCE ADMIN DEBUG START');
     
-    // Cek apakah admin sudah ada
-    const existingAdmin = await User.findOne({ email: 'admin@tradestation.com' });
-    if (existingAdmin) {
-      console.log('✅ Admin already exists');
+    // Cek database connection
+    const dbState = mongoose.connection.readyState;
+    console.log('Database state:', dbState);
+    
+    if (dbState !== 1) {
       return res.json({
-        status: 'exists',
-        message: 'Admin user already exists',
-        credentials: {
-          email: 'admin@tradestation.com',
-          password: 'admin123'
-        }
+        status: 'error',
+        message: 'Database not connected',
+        dbState: dbState
       });
     }
     
-    // Hash password
-    const hashedPassword = await bcrypt.hash('admin123', 12);
-    console.log('🔐 Password hashed');
+    // Count total users
+    const userCount = await User.countDocuments();
+    console.log('Total users in DB:', userCount);
     
-    // Buat admin user
+    // Cek admin spesifik
+    const existingAdmin = await User.findOne({ email: 'admin@tradestation.com' });
+    console.log('Existing admin found:', !!existingAdmin);
+    
+    if (existingAdmin) {
+      console.log('Admin details:', {
+        id: existingAdmin._id,
+        email: existingAdmin.email,
+        name: existingAdmin.name,
+        isActive: existingAdmin.isActive,
+        passwordLength: existingAdmin.password.length
+      });
+      
+      return res.json({
+        status: 'admin_exists',
+        admin: {
+          id: existingAdmin._id,
+          email: existingAdmin.email,
+          name: existingAdmin.name,
+          isActive: existingAdmin.isActive,
+          passwordHash: existingAdmin.password.substring(0, 20) + '...',
+          createdAt: existingAdmin.createdAt
+        },
+        userCount: userCount
+      });
+    }
+    
+    // FORCE CREATE ADMIN
+    console.log('🚀 FORCE CREATING ADMIN...');
+    
+    // Delete any existing admin first
+    await User.deleteMany({ email: 'admin@tradestation.com' });
+    console.log('Deleted any existing admin');
+    
+    // Create new admin with SIMPLE password hash
+    const simplePassword = 'admin123';
+    const hashedPassword = await bcrypt.hash(simplePassword, 10); // Reduced rounds
+    
+    console.log('Password to hash:', simplePassword);
+    console.log('Hashed password:', hashedPassword);
+    
     const adminUser = await User.create({
       email: 'admin@tradestation.com',
       password: hashedPassword,
@@ -399,27 +441,34 @@ app.post('/api/bootstrap/admin', async (req, res) => {
       isActive: true,
       referralCode: 'ADMIN2024',
       referredBy: null,
-      bankAccount: {
-        bankName: null,
-        accountNumber: null,
-        accountHolder: null
-      },
+      bankAccount: {},
       lastLoginAt: new Date(),
-      ipAddress: req.ip || '127.0.0.1',
-      deviceInfo: 'Bootstrap Creation',
+      ipAddress: '127.0.0.1',
+      deviceInfo: 'Force Created',
       createdAt: new Date()
     });
     
-    console.log('✅ Admin user created:', adminUser._id);
+    console.log('✅ ADMIN FORCE CREATED:', adminUser._id);
+    
+    // Verify creation immediately
+    const verification = await User.findById(adminUser._id);
+    console.log('Verification successful:', !!verification);
+    
+    // Test password immediately
+    const passwordTest = await bcrypt.compare('admin123', adminUser.password);
+    console.log('Password test result:', passwordTest);
     
     res.json({
-      status: 'created',
-      message: 'Admin user created successfully',
+      status: 'force_created',
       admin: {
         id: adminUser._id,
         email: adminUser.email,
-        name: adminUser.name
+        name: adminUser.name,
+        isActive: adminUser.isActive,
+        passwordHash: adminUser.password.substring(0, 20) + '...',
+        passwordTest: passwordTest
       },
+      message: 'Admin force created and verified',
       credentials: {
         email: 'admin@tradestation.com',
         password: 'admin123'
@@ -427,7 +476,143 @@ app.post('/api/bootstrap/admin', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Bootstrap error:', error);
+    console.error('❌ FORCE ADMIN ERROR:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// 2. ENDPOINT UNTUK TEST LOGIN DENGAN DEBUGGING DETAIL
+app.post('/api/debug/test-login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    console.log('🔍 DEBUG LOGIN TEST START');
+    console.log('Request body:', { email, password: password ? '***' : 'empty' });
+    
+    if (!email || !password) {
+      return res.json({
+        status: 'missing_fields',
+        message: 'Email or password missing',
+        received: { email: !!email, password: !!password }
+      });
+    }
+    
+    // Find user dengan logging detail
+    console.log('Finding user with email:', email.toLowerCase());
+    const user = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!user) {
+      console.log('❌ User not found');
+      // List all users untuk debugging
+      const allUsers = await User.find({}, 'email name');
+      console.log('All users in DB:', allUsers);
+      
+      return res.json({
+        status: 'user_not_found',
+        message: 'User not found in database',
+        searchedEmail: email.toLowerCase(),
+        allUsers: allUsers.map(u => ({ email: u.email, name: u.name }))
+      });
+    }
+    
+    console.log('✅ User found:', {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      isActive: user.isActive,
+      accountType: user.accountType,
+      passwordLength: user.password.length
+    });
+    
+    // Test password comparison
+    console.log('Testing password comparison...');
+    console.log('Input password:', password);
+    console.log('Stored hash (first 20 chars):', user.password.substring(0, 20));
+    
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    console.log('Password comparison result:', isValidPassword);
+    
+    // Additional password tests
+    const testPasswords = ['admin123', 'Admin123', 'ADMIN123'];
+    const passwordTests = {};
+    
+    for (const testPwd of testPasswords) {
+      const testResult = await bcrypt.compare(testPwd, user.password);
+      passwordTests[testPwd] = testResult;
+      console.log(`Password test "${testPwd}":`, testResult);
+    }
+    
+    res.json({
+      status: 'debug_complete',
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        isActive: user.isActive,
+        accountType: user.accountType,
+        passwordHash: user.password.substring(0, 20) + '...'
+      },
+      passwordCheck: {
+        inputPassword: password,
+        isValid: isValidPassword,
+        testResults: passwordTests
+      },
+      message: isValidPassword ? 'Password is correct' : 'Password is incorrect'
+    });
+    
+  } catch (error) {
+    console.error('❌ DEBUG LOGIN ERROR:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// 3. ENDPOINT BYPASS LOGIN (TEMPORARY FIX)
+app.post('/api/debug/bypass-login', async (req, res) => {
+  try {
+    console.log('🚨 BYPASS LOGIN ATTEMPT');
+    
+    const user = await User.findOne({ email: 'admin@tradestation.com' });
+    
+    if (!user) {
+      return res.json({
+        status: 'no_admin',
+        message: 'No admin user found'
+      });
+    }
+    
+    // Generate token tanpa password check
+    const token = jwt.sign(
+      { id: user._id, email: user.email }, 
+      JWT_SECRET, 
+      { expiresIn: '7d' }
+    );
+    
+    console.log('✅ BYPASS LOGIN SUCCESS');
+    
+    res.json({
+      status: 'bypass_success',
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        balance: user.balance,
+        accountType: user.accountType,
+        referralCode: user.referralCode
+      },
+      message: 'Login bypassed successfully'
+    });
+    
+  } catch (error) {
+    console.error('❌ BYPASS LOGIN ERROR:', error);
     res.status(500).json({
       status: 'error',
       message: error.message
@@ -435,86 +620,104 @@ app.post('/api/bootstrap/admin', async (req, res) => {
   }
 });
 
-// Debug endpoint untuk cek admin
-app.get('/api/debug/admin', async (req, res) => {
-  try {
-    const admin = await User.findOne({ email: 'admin@tradestation.com' });
-    
-    if (admin) {
-      res.json({
-        status: 'found',
-        admin: {
-          id: admin._id,
-          email: admin.email,
-          name: admin.name,
-          isActive: admin.isActive,
-          accountType: admin.accountType,
-          createdAt: admin.createdAt
-        }
-      });
-    } else {
-      res.json({
-        status: 'not_found',
-        message: 'Admin user not found'
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      error: error.message
-    });
-  }
-});
+// 4. MODIFIKASI ENDPOINT LOGIN ASLI DENGAN LOGGING DETAIL
+// Ganti endpoint /api/login yang sudah ada dengan yang ini:
 
-app.get('/api/status', async (req, res) => {
+app.post('/api/login', rateLimit(20, 600000), async (req, res) => {
   try {
-    const [
-      userCount,
-      activeTradesCount,
-      pendingDepositsCount,
-      pendingWithdrawalsCount,
-      latestPrices,
-      totalVolume
-    ] = await Promise.all([
-      User.countDocuments(),
-      Trade.countDocuments({ status: 'active' }),
-      Deposit.countDocuments({ status: 'pending' }),
-      Withdrawal.countDocuments({ status: 'pending' }),
-      Price.find().sort({ timestamp: -1 }).limit(5),
-      Trade.aggregate([
-        { $match: { status: 'completed', createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } },
-        { $group: { _id: null, totalVolume: { $sum: '$amount' } } }
-      ])
-    ]);
+    const { email, password } = req.body;
+    
+    console.log('🔍 LOGIN ATTEMPT:', { 
+      email, 
+      password: password ? '***' : 'empty',
+      ip: req.ip,
+      userAgent: req.get('User-Agent')?.substring(0, 50)
+    });
+    
+    if (!email || !password) {
+      console.log('❌ Missing credentials');
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+    
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      console.log('❌ User not found:', email);
+      
+      // Debug: show what users exist
+      const userCount = await User.countDocuments();
+      console.log('Total users in database:', userCount);
+      
+      if (userCount < 5) {
+        const allUsers = await User.find({}, 'email name');
+        console.log('All users:', allUsers.map(u => u.email));
+      }
+      
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    console.log('✅ User found:', {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      isActive: user.isActive,
+      accountType: user.accountType
+    });
+
+    if (!user.isActive) {
+      console.log('❌ User account suspended');
+      return res.status(400).json({ error: 'Account is suspended' });
+    }
+
+    console.log('🔍 Comparing passwords...');
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    console.log('Password valid:', isValidPassword);
+    
+    if (!isValidPassword) {
+      console.log('❌ Invalid password for user:', email);
+      
+      // Debug: test common variations
+      const testVariations = ['admin123', 'Admin123', 'ADMIN123', '123456'];
+      for (const testPwd of testVariations) {
+        const testResult = await bcrypt.compare(testPwd, user.password);
+        if (testResult) {
+          console.log(`✅ Password match found with: ${testPwd}`);
+        }
+      }
+      
+      logActivity(user._id, 'LOGIN_FAILED', 'Invalid password attempt', {}, req);
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    // Update last login
+    user.lastLoginAt = new Date();
+    user.ipAddress = req.ip;
+    user.deviceInfo = req.get('User-Agent');
+    await user.save();
+
+    const token = jwt.sign(
+      { id: user._id, email: user.email }, 
+      JWT_SECRET, 
+      { expiresIn: '7d' }
+    );
+    
+    logActivity(user._id, 'USER_LOGIN', 'User logged in', {}, req);
+
+    console.log('✅ Login successful for:', email);
 
     res.json({
-      status: 'operational',
-      stats: {
-        totalUsers: userCount,
-        activeTrades: activeTradesCount,
-        pendingDeposits: pendingDepositsCount,
-        pendingWithdrawals: pendingWithdrawalsCount,
-        totalVolume24h: totalVolume[0]?.totalVolume || 0,
-        pricesLastUpdate: latestPrices[0]?.timestamp || null
-      },
-      services: {
-        database: mongoose.connection.readyState === 1,
-        priceFeeds: latestPrices.length > 0,
-        webSocket: true,
-        trading: true
-      },
-      settings: {
-        minTradeAmount: MIN_TRADE_AMOUNT,
-        maxTradeAmount: MAX_TRADE_AMOUNT,
-        defaultWinRate: DEFAULT_WIN_RATE,
-        tradingCommission: TRADING_COMMISSION
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        balance: user.balance,
+        accountType: user.accountType,
+        referralCode: user.referralCode
       }
     });
   } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      error: error.message
-    });
+    console.error('❌ Login error:', error);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
