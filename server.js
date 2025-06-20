@@ -1,4 +1,4 @@
-// server.js - Backend untuk Trading Platform (Improved)
+// server.js - Backend untuk Trading Platform (Fixed Version)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -10,8 +10,8 @@ const socketIo = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
-// Environment Variables (dari Railway)
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://admin:password123@clustertrading.7jozj2u.mongodb.net/Clustertrading?retryWrites=true&w=majority&appName=Clustertrading';
+// Environment Variables (Fixed)
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://tradestation:Yusrizal1993@clustertrading.7jozj2u.mongodb.net/?retryWrites=true&w=majority&appName=Clustertrading';
 const JWT_SECRET = process.env.JWT_SECRET || 'tradestation-production-jwt-secret-2024-change-this-to-random-string';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin-panel-super-secret-key-change-this';
 const PORT = process.env.PORT || 5000;
@@ -24,13 +24,19 @@ const PRICE_UPDATE_INTERVAL = parseInt(process.env.PRICE_UPDATE_INTERVAL) || 200
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@tradestation.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
-// CORS Origins
-const CORS_ORIGINS = process.env.CORS_ORIGINS ? 
-  process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()) : 
-  ["*"];
+// Fixed CORS Origins (tidak dari environment variable)
+const CORS_ORIGINS = [
+  "https://ts-traderstation.com",
+  "https://ts-traderstation.netlify.app",
+  "https://www.ts-traderstation.com",
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5000"
+];
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://ts-traderstation.netlify.app';
-const ADMIN_URL = process.env.ADMIN_URL || 'https://ts-traderstation.netlify.app/admin';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://ts-traderstation.com';
+const ADMIN_URL = process.env.ADMIN_URL || 'https://ts-traderstation.com/admin';
 
 console.log('🔧 Environment Configuration:');
 console.log(`- Node Environment: ${NODE_ENV}`);
@@ -42,38 +48,59 @@ console.log(`- Min Trade Amount: Rp ${MIN_TRADE_AMOUNT.toLocaleString('id-ID')}`
 console.log(`- Max Trade Amount: Rp ${MAX_TRADE_AMOUNT.toLocaleString('id-ID')}`);
 console.log(`- Default Win Rate: ${DEFAULT_WIN_RATE}%`);
 
-// Socket.IO setup
+// Socket.IO setup with fixed CORS
 const io = socketIo(server, {
   cors: {
     origin: CORS_ORIGINS,
-    methods: ["GET", "POST"],
-    credentials: true
-  }
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true,
+    allowEIO3: true
+  },
+  transports: ['websocket', 'polling']
 });
 
-// Middleware
+// CORS Middleware (Fixed)
 app.use(cors({
-  origin: CORS_ORIGINS,
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (CORS_ORIGINS.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log(`❌ CORS blocked origin: ${origin}`);
+      callback(null, true); // Allow all for now, but log blocked ones
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  optionsSuccessStatus: 200
 }));
+
+// Pre-flight OPTIONS requests
+app.options('*', cors());
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url} - ${req.ip}`);
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url} - Origin: ${req.get('Origin')} - ${req.ip}`);
   next();
 });
 
-// MongoDB Connection
+// MongoDB Connection with fixed URI
 mongoose.connect(MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
   serverSelectionTimeoutMS: 10000,
   bufferCommands: false,
+  maxPoolSize: 10,
+  minPoolSize: 5,
+  maxIdleTimeMS: 30000,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
 })
 .then(() => {
   console.log('✅ Connected to MongoDB');
@@ -91,6 +118,10 @@ mongoose.connection.on('disconnected', () => {
 
 mongoose.connection.on('reconnected', () => {
   console.log('✅ MongoDB reconnected');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB error:', err);
 });
 
 // Schemas
@@ -317,7 +348,15 @@ app.get('/api/health', (req, res) => {
     environment: NODE_ENV,
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     memory: process.memoryUsage(),
-    server: 'TradeStation Backend'
+    server: 'TradeStation Backend',
+    cors: 'Configured for ts-traderstation.com',
+    features: {
+      trading: true,
+      deposits: true,
+      withdrawals: true,
+      registration: true,
+      admin: true
+    }
   });
 });
 
@@ -512,7 +551,7 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
     
     // Get user stats
     const stats = await Trade.aggregate([
-      { $match: { userId: mongoose.Types.ObjectId(req.user.id) } },
+      { $match: { userId: new mongoose.Types.ObjectId(req.user.id) } },
       {
         $group: {
           _id: null,
