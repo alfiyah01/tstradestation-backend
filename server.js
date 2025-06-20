@@ -3,206 +3,67 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const http = require('http');
-const socketIo = require('socket.io');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
-
-// ===========================================
-// KONFIGURASI APLIKASI (Pengaturan Dasar)
-// ===========================================
+const http = require('http');
+const socketIo = require('socket.io');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
+
+// Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: function (origin, callback) {
-            const allowedOrigins = [
-                'https://ts-traderstation.com',
-                'http://ts-traderstation.com',
-                'https://www.ts-traderstation.com', 
-                'http://www.ts-traderstation.com',
-                'https://ts-traderstation.netlify.app',
-                'https://www.ts-traderstation.netlify.app',
-                'http://localhost:3000',
-                'http://localhost:5000'
-            ];
-            
-            if (!origin || allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                callback(null, true); // Allow all for debugging
-            }
-        },
-        methods: ["GET", "POST", "PUT", "DELETE"],
-        credentials: true,
-        allowEIO3: true
+        origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500"],
+        methods: ["GET", "POST"],
+        credentials: true
     },
-    transports: ['websocket', 'polling'],
-    pingTimeout: 60000,
-    pingInterval: 25000
+    transports: ['websocket', 'polling']
 });
 
-// Pengaturan port
-const PORT = process.env.PORT || 3000;
-
-// Kunci rahasia untuk JWT (token keamanan)
-const JWT_SECRET = process.env.JWT_SECRET || 'tradestation_secret_key_2024';
-
-// ===========================================
-// MIDDLEWARE (Penghubung Aplikasi)
-// ===========================================
-
-// Trust proxy (penting untuk Railway)
-app.set('trust proxy', 1);
-
-// Keamanan aplikasi dengan konfigurasi yang lebih permissive
+// Middleware
 app.use(helmet({
-    crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: false,
-    crossOriginResourcePolicy: { policy: "cross-origin" }
+    crossOriginEmbedderPolicy: false
 }));
 
-// CORS Configuration yang lebih komprehensif
-const corsOptions = {
-    origin: function (origin, callback) {
-        // Allow requests with no origin (mobile apps, Postman, etc.)
-        if (!origin) return callback(null, true);
-        
-        const allowedOrigins = [
-            'https://ts-traderstation.com',
-            'http://ts-traderstation.com',
-            'https://www.ts-traderstation.com', 
-            'http://www.ts-traderstation.com',
-            'https://ts-traderstation.netlify.app',
-            'https://www.ts-traderstation.netlify.app',
-            'http://localhost:3000',
-            'http://localhost:5000',
-            'http://127.0.0.1:3000',
-            'http://127.0.0.1:5000'
-        ];
-        
-        if (allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            console.log('CORS blocked origin:', origin);
-            callback(null, true); // Allow all for debugging - change to false in production
-        }
-    },
+app.use(cors({
+    origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500"],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: [
-        'Content-Type', 
-        'Authorization', 
-        'Accept', 
-        'Origin', 
-        'X-Requested-With',
-        'Access-Control-Allow-Origin',
-        'Access-Control-Allow-Headers',
-        'Access-Control-Allow-Methods'
-    ],
-    exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
-    optionsSuccessStatus: 200,
-    preflightContinue: false
-};
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Apply CORS
-app.use(cors(corsOptions));
-
-// Handle preflight requests explicitly
-app.options('*', cors(corsOptions));
-
-// Additional CORS headers for stubborn browsers
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    
-    if (req.method === 'OPTIONS') {
-        res.sendStatus(200);
-    } else {
-        next();
-    }
-});
-
-// Membaca data JSON dari request
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Logging middleware
-app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
-    next();
-});
-
-// Membatasi jumlah request (mencegah spam) - lebih permissive untuk testing
+// Rate limiting
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 menit
-    max: 200, // maksimal 200 request per 15 menit (dinaikkan untuk testing)
-    message: { error: 'Terlalu banyak request, coba lagi nanti' },
-    standardHeaders: true,
-    legacyHeaders: false,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.'
 });
 app.use('/api/', limiter);
 
-// ===========================================
-// KONEKSI DATABASE MONGODB
-// ===========================================
-
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://tradestation:Yusrizal1993@clustertrading.7jozj2u.mongodb.net/tradestation?retryWrites=true&w=majority&appName=Clustertrading';
-
-// MongoDB connection with better error handling
-mongoose.connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-    family: 4
-}).then(() => {
-    console.log('✅ Database MongoDB berhasil terhubung');
-    console.log('📊 Database name:', mongoose.connection.name);
-}).catch((error) => {
-    console.error('❌ Error koneksi database:', error.message);
-    // Don't exit process, let it try to reconnect
+// Strict rate limiting for auth endpoints
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5, // limit each IP to 5 requests per windowMs
+    message: 'Too many authentication attempts, please try again later.'
 });
 
-// MongoDB connection event handlers
-mongoose.connection.on('connected', () => {
-    console.log('🔗 MongoDB connected successfully');
-});
-
-mongoose.connection.on('error', (error) => {
-    console.error('❌ MongoDB connection error:', error.message);
-});
-
-mongoose.connection.on('disconnected', () => {
-    console.log('🔌 MongoDB disconnected');
-});
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-    await mongoose.connection.close();
-    console.log('🔌 MongoDB connection closed through app termination');
-    process.exit(0);
-});
-
-// ===========================================
-// SCHEMA DATABASE (Struktur Data)
-// ===========================================
-
-// Schema untuk User (Data Pengguna)
+// Database Models
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     phone: { type: String },
     balance: { type: Number, default: 0 },
+    accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
+    isActive: { type: Boolean, default: true },
     totalProfit: { type: Number, default: 0 },
     totalLoss: { type: Number, default: 0 },
-    accountType: { type: String, default: 'standard', enum: ['standard', 'premium'] },
-    isActive: { type: Boolean, default: true },
     referralCode: { type: String, unique: true },
     stats: {
         totalTrades: { type: Number, default: 0 },
@@ -214,40 +75,37 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// Schema untuk Trade (Data Trading)
 const tradeSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    symbol: { type: String, required: true }, // BTC, ETH, dll
-    direction: { type: String, required: true, enum: ['buy', 'sell'] },
+    symbol: { type: String, required: true },
+    direction: { type: String, enum: ['buy', 'sell'], required: true },
     amount: { type: Number, required: true },
+    profitPercentage: { type: Number, required: true },
+    duration: { type: Number, required: true }, // in seconds
     entryPrice: { type: Number, required: true },
     exitPrice: { type: Number },
-    profitPercentage: { type: Number, required: true },
-    duration: { type: Number, required: true }, // dalam detik
-    status: { type: String, default: 'active', enum: ['active', 'completed', 'cancelled'] },
+    status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
     result: { type: String, enum: ['win', 'lose'] },
-    payout: { type: Number, default: 0 },
+    payout: { type: Number },
     priceChangePercent: { type: Number },
-    forceResult: { type: String, enum: ['win', 'lose'] },
-    completedAt: { type: Date },
-    createdAt: { type: Date, default: Date.now }
+    forceResult: { type: String }, // admin override
+    createdAt: { type: Date, default: Date.now },
+    completedAt: { type: Date }
 });
 
-// Schema untuk Deposit (Data Setoran)
 const depositSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
     method: { type: String, default: 'Bank Transfer' },
-    bankFrom: { type: String, required: true },
-    receipt: { type: String, required: true },
-    status: { type: String, default: 'pending', enum: ['pending', 'approved', 'rejected'] },
+    bankFrom: { type: String },
+    receipt: { type: String }, // URL atau text bukti transfer
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     adminNotes: { type: String },
     transferTime: { type: Date },
-    processedAt: { type: Date },
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+    processedAt: { type: Date }
 });
 
-// Schema untuk Withdrawal (Data Penarikan)
 const withdrawalSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
@@ -258,531 +116,452 @@ const withdrawalSchema = new mongoose.Schema({
         accountNumber: { type: String, required: true },
         accountHolder: { type: String, required: true }
     },
-    status: { type: String, default: 'pending', enum: ['pending', 'approved', 'rejected', 'processed'] },
+    status: { type: String, enum: ['pending', 'approved', 'rejected', 'processed'], default: 'pending' },
     adminNotes: { type: String },
-    processedAt: { type: Date },
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+    processedAt: { type: Date }
 });
 
-// Schema untuk Activity Log (Log Aktivitas)
+const priceSchema = new mongoose.Schema({
+    symbol: { type: String, required: true, unique: true },
+    price: { type: Number, required: true },
+    change: { type: Number, default: 0 }, // percentage change
+    lastUpdate: { type: Date, default: Date.now }
+});
+
 const activitySchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     action: { type: String, required: true },
     details: { type: String },
-    ipAddress: { type: String },
-    userAgent: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 
-// Membuat Model dari Schema
+// Create models
 const User = mongoose.model('User', userSchema);
 const Trade = mongoose.model('Trade', tradeSchema);
 const Deposit = mongoose.model('Deposit', depositSchema);
 const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
+const Price = mongoose.model('Price', priceSchema);
 const Activity = mongoose.model('Activity', activitySchema);
 
-// ===========================================
-// FUNGSI BANTUAN (Helper Functions)
-// ===========================================
-
-// Generate kode referral unik
+// Helper functions
 function generateReferralCode() {
-    return 'TS' + Math.random().toString(36).substr(2, 6).toUpperCase();
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Fungsi untuk log aktivitas user
-async function logActivity(userId, action, details, req) {
+async function logActivity(userId, action, details = '') {
     try {
-        await new Activity({
-            userId,
-            action,
-            details,
-            ipAddress: req.ip,
-            userAgent: req.get('User-Agent')
-        }).save();
+        await Activity.create({ userId, action, details });
     } catch (error) {
         console.error('Error logging activity:', error);
     }
 }
 
-// Middleware untuk verifikasi token JWT
-function authenticateToken(req, res, next) {
+// Authentication middleware
+const authenticateToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
-        return res.status(401).json({ error: 'Token tidak ditemukan' });
+        return res.status(401).json({ error: 'Access token required' });
     }
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-            return res.status(403).json({ error: 'Token tidak valid' });
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await User.findById(decoded.userId);
+        
+        if (!user || !user.isActive) {
+            return res.status(403).json({ error: 'User not found or inactive' });
         }
+        
+        req.userId = decoded.userId;
         req.user = user;
         next();
-    });
-}
-
-// Middleware khusus untuk admin
-function authenticateAdmin(req, res, next) {
-    authenticateToken(req, res, async (err) => {
-        if (err) return;
-        
-        try {
-            const user = await User.findById(req.user.id);
-            if (!user || user.email !== 'admin@tradestation.com') {
-                return res.status(403).json({ error: 'Akses admin diperlukan' });
-            }
-            next();
-        } catch (error) {
-            res.status(500).json({ error: 'Error verifikasi admin' });
-        }
-    });
-}
-
-// ===========================================
-// SISTEM HARGA CRYPTO REAL-TIME
-// ===========================================
-
-// Data harga cryptocurrency (simulasi real-time)
-let cryptoPrices = {
-    BTC: { symbol: 'BTC', price: 45000, change: 2.45, lastUpdate: Date.now() },
-    ETH: { symbol: 'ETH', price: 3200, change: -1.23, lastUpdate: Date.now() },
-    LTC: { symbol: 'LTC', price: 180, change: 0.85, lastUpdate: Date.now() },
-    XRP: { symbol: 'XRP', price: 0.75, change: 1.45, lastUpdate: Date.now() },
-    DOGE: { symbol: 'DOGE', price: 0.12, change: -0.65, lastUpdate: Date.now() },
-    TRX: { symbol: 'TRX', price: 0.08, change: 0.95, lastUpdate: Date.now() },
-    ETC: { symbol: 'ETC', price: 25, change: 1.75, lastUpdate: Date.now() },
-    NEO: { symbol: 'NEO', price: 15, change: -0.25, lastUpdate: Date.now() }
+    } catch (error) {
+        return res.status(403).json({ error: 'Invalid token' });
+    }
 };
 
-// Fungsi update harga secara otomatis
-function updateCryptoPrices() {
-    Object.keys(cryptoPrices).forEach(symbol => {
-        const crypto = cryptoPrices[symbol];
-        
-        // Simulasi perubahan harga random (-2% sampai +2%)
-        const changePercent = (Math.random() - 0.5) * 4;
-        const priceChange = crypto.price * (changePercent / 100);
-        
-        crypto.price = Math.max(0.01, crypto.price + priceChange);
-        crypto.change = changePercent;
-        crypto.lastUpdate = Date.now();
-    });
-
-    // Kirim update ke semua client yang terhubung
-    io.emit('priceUpdate', cryptoPrices);
-}
-
-// Update harga setiap 2 detik
-setInterval(updateCryptoPrices, 2000);
-
-// ===========================================
-// TRADING ENGINE (Mesin Trading)
-// ===========================================
-
-// Fungsi untuk memproses trade yang sudah expired
-async function processExpiredTrades() {
+// Admin middleware
+const requireAdmin = async (req, res, next) => {
     try {
-        const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
-        
-        for (const trade of activeTrades) {
-            const tradeAge = (Date.now() - new Date(trade.createdAt)) / 1000;
-            
-            // Cek apakah trade sudah expired
-            if (tradeAge >= trade.duration) {
-                const currentPrice = cryptoPrices[trade.symbol]?.price || trade.entryPrice;
-                const priceChangePercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
-                
-                let result;
-                
-                // Cek apakah admin memaksa hasil
-                if (trade.forceResult) {
-                    result = trade.forceResult;
-                } else {
-                    // Logika hasil trade berdasarkan arah dan perubahan harga
-                    if (trade.direction === 'buy') {
-                        result = currentPrice > trade.entryPrice ? 'win' : 'lose';
-                    } else { // sell
-                        result = currentPrice < trade.entryPrice ? 'win' : 'lose';
-                    }
-                }
-                
-                // Hitung payout
-                let payout = 0;
-                if (result === 'win') {
-                    payout = trade.amount + (trade.amount * trade.profitPercentage / 100);
-                }
-                
-                // Update trade
-                trade.status = 'completed';
-                trade.result = result;
-                trade.exitPrice = currentPrice;
-                trade.payout = payout;
-                trade.priceChangePercent = priceChangePercent;
-                trade.completedAt = new Date();
-                await trade.save();
-                
-                // Update user balance dan stats
-                const user = trade.userId;
-                if (result === 'win') {
-                    user.balance += payout;
-                    user.totalProfit += (payout - trade.amount);
-                    user.stats.winTrades += 1;
-                } else {
-                    user.totalLoss += trade.amount;
-                    user.stats.loseTrades += 1;
-                }
-                
-                user.stats.totalTrades += 1;
-                user.stats.winRate = (user.stats.winTrades / user.stats.totalTrades) * 100;
-                await user.save();
-                
-                // Kirim notifikasi ke user
-                io.to(user._id.toString()).emit('tradeCompleted', {
-                    trade: trade,
-                    result: result,
-                    payout: payout,
-                    newBalance: user.balance
-                });
-                
-                console.log(`✅ Trade ${trade._id} completed: ${result.toUpperCase()}`);
-            }
+        if (req.user.email !== 'admin@tradestation.com') {
+            return res.status(403).json({ error: 'Admin access required' });
         }
+        next();
     } catch (error) {
-        console.error('❌ Error processing trades:', error);
+        return res.status(403).json({ error: 'Admin verification failed' });
+    }
+};
+
+// Initialize default prices
+async function initializePrices() {
+    const defaultPrices = [
+        { symbol: 'BTC', price: 45000, change: 2.45 },
+        { symbol: 'ETH', price: 3200, change: -1.23 },
+        { symbol: 'LTC', price: 180, change: 0.87 },
+        { symbol: 'XRP', price: 0.65, change: 3.21 },
+        { symbol: 'DOGE', price: 0.08, change: -2.15 },
+        { symbol: 'TRX', price: 0.12, change: 1.45 },
+        { symbol: 'ETC', price: 25, change: -0.65 },
+        { symbol: 'NEO', price: 15, change: 2.87 }
+    ];
+
+    for (const priceData of defaultPrices) {
+        await Price.findOneAndUpdate(
+            { symbol: priceData.symbol },
+            priceData,
+            { upsert: true, new: true }
+        );
     }
 }
 
-// Proses trade expired setiap 1 detik
-setInterval(processExpiredTrades, 1000);
+// Price update simulation
+function simulatePriceUpdates() {
+    setInterval(async () => {
+        try {
+            const prices = await Price.find();
+            
+            for (const price of prices) {
+                // Random price change between -5% to +5%
+                const changePercent = (Math.random() - 0.5) * 0.1; // -5% to +5%
+                const newPrice = price.price * (1 + changePercent);
+                const change = ((newPrice - price.price) / price.price) * 100;
+                
+                price.price = parseFloat(newPrice.toFixed(price.symbol === 'BTC' ? 0 : 6));
+                price.change = parseFloat(change.toFixed(2));
+                price.lastUpdate = new Date();
+                
+                await price.save();
+                
+                // Broadcast price update to all connected clients
+                io.emit('priceUpdate', {
+                    symbol: price.symbol,
+                    price: price.price,
+                    change: price.change
+                });
+            }
+        } catch (error) {
+            console.error('Error updating prices:', error);
+        }
+    }, 3000); // Update every 3 seconds
+}
 
-// ===========================================
-// API ROUTES - AUTHENTICATION
-// ===========================================
+// Trade completion checker
+function checkTradesToComplete() {
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
+            
+            for (const trade of activeTrades) {
+                const createdAt = new Date(trade.createdAt);
+                const elapsedSeconds = Math.floor((now - createdAt) / 1000);
+                
+                if (elapsedSeconds >= trade.duration) {
+                    // Get current price
+                    const currentPrice = await Price.findOne({ symbol: trade.symbol });
+                    
+                    if (currentPrice) {
+                        trade.exitPrice = currentPrice.price;
+                        trade.status = 'completed';
+                        trade.completedAt = now;
+                        
+                        // Calculate price change
+                        const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
+                        trade.priceChangePercent = priceChangePercent;
+                        
+                        // Determine result based on direction or force result
+                        let result;
+                        if (trade.forceResult) {
+                            result = trade.forceResult;
+                        } else {
+                            if (trade.direction === 'buy') {
+                                result = currentPrice.price > trade.entryPrice ? 'win' : 'lose';
+                            } else {
+                                result = currentPrice.price < trade.entryPrice ? 'win' : 'lose';
+                            }
+                        }
+                        
+                        trade.result = result;
+                        
+                        // Calculate payout
+                        if (result === 'win') {
+                            trade.payout = trade.amount + (trade.amount * trade.profitPercentage / 100);
+                            trade.userId.balance += trade.payout;
+                            trade.userId.totalProfit += (trade.payout - trade.amount);
+                        } else {
+                            trade.payout = 0;
+                            trade.userId.totalLoss += trade.amount;
+                        }
+                        
+                        // Update user stats
+                        trade.userId.stats.totalTrades += 1;
+                        if (result === 'win') {
+                            trade.userId.stats.winTrades += 1;
+                        } else {
+                            trade.userId.stats.loseTrades += 1;
+                        }
+                        trade.userId.stats.winRate = (trade.userId.stats.winTrades / trade.userId.stats.totalTrades) * 100;
+                        
+                        await trade.save();
+                        await trade.userId.save();
+                        
+                        // Log activity
+                        await logActivity(trade.userId._id, 'TRADE_COMPLETED', `${trade.symbol} ${trade.direction} ${result}`);
+                        
+                        // Notify user via socket
+                        io.to(trade.userId._id.toString()).emit('tradeCompleted', {
+                            trade,
+                            result,
+                            payout: trade.payout,
+                            newBalance: trade.userId.balance
+                        });
+                        
+                        console.log(`✅ Trade completed: ${trade._id} - ${result}`);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error checking trades:', error);
+        }
+    }, 1000); // Check every second
+}
 
-// Health Check - Enhanced
+// API Routes
+
+// Health check
 app.get('/api/health', (req, res) => {
-    // Set CORS headers explicitly for health check
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    
-    const healthData = {
-        status: 'OK',
+    res.json({ 
+        status: 'OK', 
+        message: 'TradeStation Backend is running',
         timestamp: new Date().toISOString(),
-        uptime: Math.floor(process.uptime()),
-        message: 'TradeStation API is running perfectly!',
-        environment: process.env.NODE_ENV || 'development',
-        database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
-        version: '1.0.0',
-        cors: 'Enabled',
-        endpoints: {
-            auth: '/api/login, /api/register',
-            trading: '/api/trade, /api/prices',
-            admin: '/api/admin/*'
-        }
-    };
-    
-    console.log('Health check requested from:', req.headers.origin || req.ip);
-    res.status(200).json(healthData);
-});
-
-// Root endpoint
-app.get('/', (req, res) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.json({ 
-        message: 'TradeStation API Server', 
-        status: 'Running',
-        docs: '/api/health for health check'
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
-// API root
-app.get('/api', (req, res) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.json({ 
-        message: 'TradeStation API v1.0.0', 
-        status: 'Active',
-        endpoints: {
-            health: '/api/health',
-            auth: '/api/login, /api/register, /api/profile',
-            prices: '/api/prices',
-            trading: '/api/trade, /api/trades',
-            deposits: '/api/deposit, /api/deposits',
-            withdrawals: '/api/withdrawal, /api/withdrawals',
-            admin: '/api/admin/*'
-        }
-    });
-});
-
-// Register User Baru
-app.post('/api/register', async (req, res) => {
+// Auth Routes
+app.post('/api/register', authLimiter, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
-        // Validasi input
+        // Validation
         if (!name || !email || !password) {
-            return res.status(400).json({ error: 'Nama, email, dan password harus diisi' });
+            return res.status(400).json({ error: 'Name, email, and password are required' });
         }
         
-        // Cek apakah email sudah ada
+        if (password.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        }
+        
+        // Check if user exists
         const existingUser = await User.findOne({ email });
         if (existingUser) {
-            return res.status(400).json({ error: 'Email sudah terdaftar' });
+            return res.status(400).json({ error: 'Email already registered' });
         }
         
         // Hash password
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        const hashedPassword = await bcrypt.hash(password, 12);
         
-        // Buat user baru
+        // Create user
         const user = new User({
             name,
             email,
             phone,
             password: hashedPassword,
             referralCode: generateReferralCode(),
-            balance: 0 // Saldo awal 0
+            balance: 0 // Start with 0 balance
         });
         
         await user.save();
         
-        // Buat token JWT
-        const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '30d' });
+        // Log activity
+        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email}`);
         
-        // Log aktivitas
-        await logActivity(user._id, 'USER_REGISTER', 'User registered successfully', req);
+        // Generate token
+        const token = jwt.sign(
+            { userId: user._id },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
         
-        // Response tanpa password
-        const userResponse = {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            balance: user.balance,
-            totalProfit: user.totalProfit,
-            accountType: user.accountType,
-            referralCode: user.referralCode,
-            stats: user.stats
-        };
+        // Remove password from response
+        const userResponse = user.toObject();
+        delete userResponse.password;
         
-        res.status(201).json({ 
-            token, 
-            user: userResponse,
-            message: 'Registrasi berhasil!'
+        res.status(201).json({
+            message: 'Registration successful',
+            token,
+            user: userResponse
         });
         
     } catch (error) {
-        console.error('Register error:', error);
-        res.status(500).json({ error: 'Server error saat registrasi' });
+        console.error('Registration error:', error);
+        res.status(500).json({ error: 'Registration failed' });
     }
 });
 
-// Login User
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
         
-        // Validasi input
+        // Validation
         if (!email || !password) {
-            return res.status(400).json({ error: 'Email dan password harus diisi' });
+            return res.status(400).json({ error: 'Email and password are required' });
         }
         
-        // Cari user berdasarkan email
+        // Find user
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(400).json({ error: 'Email atau password salah' });
+            return res.status(400).json({ error: 'Invalid credentials' });
         }
         
-        // Cek password
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(400).json({ error: 'Email atau password salah' });
-        }
-        
-        // Cek apakah user aktif
         if (!user.isActive) {
-            return res.status(400).json({ error: 'Akun Anda tidak aktif' });
+            return res.status(400).json({ error: 'Account is deactivated' });
+        }
+        
+        // Check password
+        const isValidPassword = await bcrypt.compare(password, user.password);
+        if (!isValidPassword) {
+            return res.status(400).json({ error: 'Invalid credentials' });
         }
         
         // Update last login
         user.lastLoginAt = new Date();
         await user.save();
         
-        // Buat token JWT
-        const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '30d' });
+        // Log activity
+        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email}`);
         
-        // Log aktivitas
-        await logActivity(user._id, 'USER_LOGIN', 'User logged in successfully', req);
+        // Generate token
+        const token = jwt.sign(
+            { userId: user._id },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
         
-        // Response tanpa password
-        const userResponse = {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            balance: user.balance,
-            totalProfit: user.totalProfit,
-            totalLoss: user.totalLoss,
-            accountType: user.accountType,
-            referralCode: user.referralCode,
-            stats: user.stats
-        };
+        // Remove password from response
+        const userResponse = user.toObject();
+        delete userResponse.password;
         
-        res.json({ 
-            token, 
-            user: userResponse,
-            message: 'Login berhasil!'
+        res.json({
+            message: 'Login successful',
+            token,
+            user: userResponse
         });
         
     } catch (error) {
         console.error('Login error:', error);
-        res.status(500).json({ error: 'Server error saat login' });
+        res.status(500).json({ error: 'Login failed' });
     }
 });
 
-// ===========================================
-// API ROUTES - USER PROFILE
-// ===========================================
-
-// Get User Profile
+// User Routes
 app.get('/api/profile', authenticateToken, async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('-password');
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
+        const user = await User.findById(req.userId).select('-password');
         res.json(user);
     } catch (error) {
         console.error('Profile error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Failed to load profile' });
     }
 });
 
-// Update User Profile
 app.put('/api/profile', authenticateToken, async (req, res) => {
     try {
         const { name, phone } = req.body;
         
         const user = await User.findByIdAndUpdate(
-            req.user.id,
+            req.userId,
             { name, phone },
             { new: true }
         ).select('-password');
         
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        await logActivity(req.user.id, 'PROFILE_UPDATE', 'Profile updated successfully', req);
-        
         res.json(user);
     } catch (error) {
         console.error('Profile update error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Failed to update profile' });
     }
 });
 
-// ===========================================
-// API ROUTES - CRYPTOCURRENCY PRICES
-// ===========================================
-
-// Get All Crypto Prices
-app.get('/api/prices', (req, res) => {
-    const pricesArray = Object.values(cryptoPrices);
-    res.json(pricesArray);
-});
-
-// Get Specific Crypto Price
-app.get('/api/prices/:symbol', (req, res) => {
-    const { symbol } = req.params;
-    const price = cryptoPrices[symbol.toUpperCase()];
-    
-    if (!price) {
-        return res.status(404).json({ error: 'Cryptocurrency tidak ditemukan' });
+// Price Routes
+app.get('/api/prices', async (req, res) => {
+    try {
+        const prices = await Price.find().sort({ symbol: 1 });
+        res.json(prices);
+    } catch (error) {
+        console.error('Prices error:', error);
+        res.status(500).json({ error: 'Failed to load prices' });
     }
-    
-    res.json(price);
 });
 
-// ===========================================
-// API ROUTES - TRADING
-// ===========================================
-
-// Create New Trade
+// Trading Routes
 app.post('/api/trade', authenticateToken, async (req, res) => {
     try {
         const { symbol, direction, amount, profitPercentage, duration } = req.body;
         
-        // Validasi input
+        // Validation
         if (!symbol || !direction || !amount || !profitPercentage || !duration) {
-            return res.status(400).json({ error: 'Semua field harus diisi' });
+            return res.status(400).json({ error: 'All fields are required' });
         }
         
-        // Validasi amount
         if (amount < 500000 || amount > 100000000) {
-            return res.status(400).json({ error: 'Jumlah trading harus antara Rp 500.000 - Rp 100.000.000' });
+            return res.status(400).json({ error: 'Amount must be between Rp 500,000 and Rp 100,000,000' });
         }
         
-        // Cek saldo user
-        const user = await User.findById(req.user.id);
-        if (user.balance < amount) {
-            return res.status(400).json({ error: 'Saldo tidak mencukupi' });
+        if (amount > req.user.balance) {
+            return res.status(400).json({ error: 'Insufficient balance' });
         }
         
         // Get current price
-        const currentPrice = cryptoPrices[symbol.toUpperCase()]?.price;
+        const currentPrice = await Price.findOne({ symbol });
         if (!currentPrice) {
-            return res.status(400).json({ error: 'Harga cryptocurrency tidak tersedia' });
+            return res.status(400).json({ error: 'Invalid symbol' });
         }
         
-        // Kurangi saldo user
-        user.balance -= amount;
-        await user.save();
+        // Deduct amount from user balance
+        req.user.balance -= amount;
+        await req.user.save();
         
-        // Buat trade baru
+        // Create trade
         const trade = new Trade({
-            userId: req.user.id,
-            symbol: symbol.toUpperCase(),
+            userId: req.userId,
+            symbol,
             direction,
             amount,
-            entryPrice: currentPrice,
             profitPercentage,
-            duration
+            duration,
+            entryPrice: currentPrice.price
         });
         
         await trade.save();
         
-        // Log aktivitas
-        await logActivity(req.user.id, 'TRADE_CREATED', `Created ${direction} trade for ${symbol} with amount ${amount}`, req);
+        // Log activity
+        await logActivity(req.userId, 'TRADE_CREATED', `${symbol} ${direction} ${amount}`);
         
-        // Emit ke socket
-        io.to(req.user.id).emit('tradeCreated', {
-            trade: trade,
-            newBalance: user.balance
+        // Notify via socket
+        io.to(req.userId.toString()).emit('tradeCreated', {
+            trade,
+            newBalance: req.user.balance
         });
         
         res.status(201).json({
-            trade: trade,
-            newBalance: user.balance,
-            message: 'Trade berhasil dibuat!'
+            message: 'Trade created successfully',
+            trade,
+            newBalance: req.user.balance
         });
         
     } catch (error) {
-        console.error('Trade creation error:', error);
-        res.status(500).json({ error: 'Server error saat membuat trade' });
+        console.error('Trade error:', error);
+        res.status(500).json({ error: 'Failed to create trade' });
     }
 });
 
-// Get User Trades
 app.get('/api/trades', authenticateToken, async (req, res) => {
     try {
-        const { limit = 20, status } = req.query;
+        const { limit = 50, status } = req.query;
         
-        let query = { userId: req.user.id };
+        let query = { userId: req.userId };
         if (status) {
             query.status = status;
         }
@@ -793,33 +572,22 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
         
         res.json({ trades });
     } catch (error) {
-        console.error('Get trades error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Trades error:', error);
+        res.status(500).json({ error: 'Failed to load trades' });
     }
 });
 
-// ===========================================
-// API ROUTES - DEPOSITS
-// ===========================================
-
-// Create Deposit Request
+// Deposit Routes
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
         const { amount, bankFrom, receipt, transferTime } = req.body;
         
-        // Validasi input
-        if (!amount || !bankFrom || !receipt) {
-            return res.status(400).json({ error: 'Semua field harus diisi' });
+        if (!amount || amount < 50000) {
+            return res.status(400).json({ error: 'Minimum deposit is Rp 50,000' });
         }
         
-        // Validasi minimum amount
-        if (amount < 50000) {
-            return res.status(400).json({ error: 'Minimum deposit Rp 50.000' });
-        }
-        
-        // Buat deposit request
         const deposit = new Deposit({
-            userId: req.user.id,
+            userId: req.userId,
             amount,
             bankFrom,
             receipt,
@@ -828,69 +596,59 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
         
         await deposit.save();
         
-        // Log aktivitas
-        await logActivity(req.user.id, 'DEPOSIT_REQUEST', `Deposit request of ${amount}`, req);
+        // Log activity
+        await logActivity(req.userId, 'DEPOSIT_REQUEST', `Deposit request: ${amount}`);
         
         res.status(201).json({
-            deposit: deposit,
-            message: 'Permintaan deposit berhasil dikirim!'
+            message: 'Deposit request submitted successfully',
+            deposit
         });
         
     } catch (error) {
         console.error('Deposit error:', error);
-        res.status(500).json({ error: 'Server error saat deposit' });
+        res.status(500).json({ error: 'Failed to submit deposit' });
     }
 });
 
-// Get User Deposits
 app.get('/api/deposits', authenticateToken, async (req, res) => {
     try {
-        const deposits = await Deposit.find({ userId: req.user.id })
+        const deposits = await Deposit.find({ userId: req.userId })
             .sort({ createdAt: -1 });
         
         res.json(deposits);
     } catch (error) {
-        console.error('Get deposits error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Deposits error:', error);
+        res.status(500).json({ error: 'Failed to load deposits' });
     }
 });
 
-// ===========================================
-// API ROUTES - WITHDRAWALS
-// ===========================================
-
-// Create Withdrawal Request
+// Withdrawal Routes
 app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
         const { amount, bankAccount } = req.body;
         
-        // Validasi input
-        if (!amount || !bankAccount || !bankAccount.bankName || !bankAccount.accountNumber || !bankAccount.accountHolder) {
-            return res.status(400).json({ error: 'Semua field harus diisi' });
+        if (!amount || amount < 100000) {
+            return res.status(400).json({ error: 'Minimum withdrawal is Rp 100,000' });
         }
         
-        // Validasi minimum amount
-        if (amount < 100000) {
-            return res.status(400).json({ error: 'Minimum withdrawal Rp 100.000' });
+        if (amount > req.user.balance) {
+            return res.status(400).json({ error: 'Insufficient balance' });
         }
         
-        // Cek saldo user
-        const user = await User.findById(req.user.id);
-        if (user.balance < amount) {
-            return res.status(400).json({ error: 'Saldo tidak mencukupi' });
-        }
-        
-        // Hitung fee (1% minimum Rp 6.500)
+        // Calculate fee (1% with minimum Rp 6,500)
         const fee = Math.max(6500, amount * 0.01);
         const finalAmount = amount - fee;
         
-        // Kurangi saldo user
-        user.balance -= amount;
-        await user.save();
+        if (finalAmount <= 0) {
+            return res.status(400).json({ error: 'Amount too small after fee deduction' });
+        }
         
-        // Buat withdrawal request
+        // Deduct amount from user balance
+        req.user.balance -= amount;
+        await req.user.save();
+        
         const withdrawal = new Withdrawal({
-            userId: req.user.id,
+            userId: req.userId,
             amount,
             fee,
             finalAmount,
@@ -899,64 +657,59 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
         
         await withdrawal.save();
         
-        // Log aktivitas
-        await logActivity(req.user.id, 'WITHDRAWAL_REQUEST', `Withdrawal request of ${amount}`, req);
+        // Log activity
+        await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal request: ${amount}`);
         
         res.status(201).json({
-            withdrawal: withdrawal,
-            newBalance: user.balance,
-            message: 'Permintaan withdrawal berhasil dikirim!'
+            message: 'Withdrawal request submitted successfully',
+            withdrawal,
+            newBalance: req.user.balance
         });
         
     } catch (error) {
         console.error('Withdrawal error:', error);
-        res.status(500).json({ error: 'Server error saat withdrawal' });
+        res.status(500).json({ error: 'Failed to submit withdrawal' });
     }
 });
 
-// Get User Withdrawals
 app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     try {
-        const withdrawals = await Withdrawal.find({ userId: req.user.id })
+        const withdrawals = await Withdrawal.find({ userId: req.userId })
             .sort({ createdAt: -1 });
         
         res.json(withdrawals);
     } catch (error) {
-        console.error('Get withdrawals error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Withdrawals error:', error);
+        res.status(500).json({ error: 'Failed to load withdrawals' });
     }
 });
 
-// ===========================================
-// API ROUTES - ADMIN PANEL
-// ===========================================
-
-// Admin Dashboard Stats
-app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
+// Admin Routes
+app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        // Hitung statistik
+        // Get statistics
         const totalUsers = await User.countDocuments();
         const activeUsers = await User.countDocuments({ isActive: true });
         const totalTrades = await Trade.countDocuments();
         const activeTrades = await Trade.countDocuments({ status: 'active' });
-        const pendingDeposits = await Deposit.countDocuments({ status: 'pending' });
         const totalDeposits = await Deposit.countDocuments({ status: 'approved' });
-        const pendingWithdrawals = await Withdrawal.countDocuments({ status: 'pending' });
+        const pendingDeposits = await Deposit.countDocuments({ status: 'pending' });
         const totalWithdrawals = await Withdrawal.countDocuments();
+        const pendingWithdrawals = await Withdrawal.countDocuments({ status: 'pending' });
         
-        // Hitung volume trading
-        const totalVolume = await Trade.aggregate([
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
+        // Calculate volumes
+        const allTrades = await Trade.find({ status: 'completed' });
+        const totalVolume = allTrades.reduce((sum, trade) => sum + trade.amount, 0);
         
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const todayVolume = await Trade.aggregate([
-            { $match: { createdAt: { $gte: today } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
+        const todayTrades = await Trade.find({ 
+            status: 'completed', 
+            createdAt: { $gte: today } 
+        });
+        const todayVolume = todayTrades.reduce((sum, trade) => sum + trade.amount, 0);
         
-        // Recent activities
+        // Get recent activities
         const recentActivities = await Activity.find()
             .populate('userId', 'name')
             .sort({ createdAt: -1 })
@@ -967,97 +720,72 @@ app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
             trades: { total: totalTrades, active: activeTrades },
             deposits: { total: totalDeposits, pending: pendingDeposits },
             withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
-            volume: {
-                total: totalVolume[0]?.total || 0,
-                today: todayVolume[0]?.total || 0
-            }
+            volume: { total: totalVolume, today: todayVolume }
         };
         
         res.json({ stats, recentActivities });
     } catch (error) {
         console.error('Admin dashboard error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Failed to load dashboard' });
     }
 });
 
-// Admin - Get All Users
-app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const users = await User.find().select('-password').sort({ createdAt: -1 });
         res.json({ users });
     } catch (error) {
-        console.error('Admin get users error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin users error:', error);
+        res.status(500).json({ error: 'Failed to load users' });
     }
 });
 
-// Admin - Get User Detail
-app.get('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+app.get('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const user = await User.findById(req.params.id).select('-password');
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        const trades = await Trade.find({ userId: req.params.id }).sort({ createdAt: -1 }).limit(20);
-        const deposits = await Deposit.find({ userId: req.params.id }).sort({ createdAt: -1 }).limit(10);
-        const withdrawals = await Withdrawal.find({ userId: req.params.id }).sort({ createdAt: -1 }).limit(10);
+        const user = await User.findById(req.params.userId).select('-password');
+        const trades = await Trade.find({ userId: req.params.userId }).sort({ createdAt: -1 });
+        const deposits = await Deposit.find({ userId: req.params.userId }).sort({ createdAt: -1 });
+        const withdrawals = await Withdrawal.find({ userId: req.params.userId }).sort({ createdAt: -1 });
         
         res.json({ user, trades, deposits, withdrawals });
     } catch (error) {
-        console.error('Admin get user detail error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin user detail error:', error);
+        res.status(500).json({ error: 'Failed to load user details' });
     }
 });
 
-// Admin - Update User
-app.put('/api/admin/user/:id', authenticateAdmin, async (req, res) => {
+app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { name, email, balance, phone, accountType, isActive } = req.body;
         
         const user = await User.findByIdAndUpdate(
-            req.params.id,
+            req.params.userId,
             { name, email, balance, phone, accountType, isActive },
             { new: true }
         ).select('-password');
         
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
+        await logActivity(req.params.userId, 'ADMIN_UPDATE', `Profile updated by admin`);
         
-        await logActivity(req.user.id, 'ADMIN_UPDATE_USER', `Updated user ${user.email}`, req);
-        
-        res.json({ user, message: 'User berhasil diupdate' });
+        res.json({ user });
     } catch (error) {
-        console.error('Admin update user error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin user update error:', error);
+        res.status(500).json({ error: 'Failed to update user' });
     }
 });
 
-// Admin - Delete/Deactivate User
-app.delete('/api/admin/user/:id', authenticateAdmin, async (req, res) => {
+app.delete('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const user = await User.findByIdAndUpdate(
-            req.params.id,
-            { isActive: false },
-            { new: true }
-        ).select('-password');
+        await User.findByIdAndUpdate(req.params.userId, { isActive: false });
+        await logActivity(req.params.userId, 'ADMIN_DEACTIVATE', `User deactivated by admin`);
         
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        await logActivity(req.user.id, 'ADMIN_DEACTIVATE_USER', `Deactivated user ${user.email}`, req);
-        
-        res.json({ user, message: 'User berhasil dinonaktifkan' });
+        res.json({ message: 'User deactivated successfully' });
     } catch (error) {
-        console.error('Admin deactivate user error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin user delete error:', error);
+        res.status(500).json({ error: 'Failed to deactivate user' });
     }
 });
 
-// Admin - Get All Trades
-app.get('/api/admin/trades', authenticateAdmin, async (req, res) => {
+app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { status } = req.query;
         let query = {};
@@ -1069,37 +797,29 @@ app.get('/api/admin/trades', authenticateAdmin, async (req, res) => {
         
         res.json({ trades });
     } catch (error) {
-        console.error('Admin get trades error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin trades error:', error);
+        res.status(500).json({ error: 'Failed to load trades' });
     }
 });
 
-// Admin - Control Trade Result
-app.put('/api/admin/trade/:id', authenticateAdmin, async (req, res) => {
+app.put('/api/admin/trade/:tradeId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { forceResult } = req.body;
         
         const trade = await Trade.findByIdAndUpdate(
-            req.params.id,
+            req.params.tradeId,
             { forceResult },
             { new: true }
         );
         
-        if (!trade) {
-            return res.status(404).json({ error: 'Trade tidak ditemukan' });
-        }
-        
-        await logActivity(req.user.id, 'ADMIN_CONTROL_TRADE', `Forced trade ${trade._id} result to ${forceResult}`, req);
-        
-        res.json({ trade, message: `Trade result diset ke ${forceResult.toUpperCase()}` });
+        res.json({ trade });
     } catch (error) {
-        console.error('Admin control trade error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin trade control error:', error);
+        res.status(500).json({ error: 'Failed to control trade' });
     }
 });
 
-// Admin - Get All Deposits
-app.get('/api/admin/deposits', authenticateAdmin, async (req, res) => {
+app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { status } = req.query;
         let query = {};
@@ -1111,50 +831,48 @@ app.get('/api/admin/deposits', authenticateAdmin, async (req, res) => {
         
         res.json({ deposits });
     } catch (error) {
-        console.error('Admin get deposits error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin deposits error:', error);
+        res.status(500).json({ error: 'Failed to load deposits' });
     }
 });
 
-// Admin - Update Deposit Status
-app.put('/api/admin/deposit/:id', authenticateAdmin, async (req, res) => {
+app.put('/api/admin/deposit/:depositId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { status, adminNotes } = req.body;
         
-        const deposit = await Deposit.findById(req.params.id).populate('userId');
+        const deposit = await Deposit.findById(req.params.depositId).populate('userId');
+        
         if (!deposit) {
-            return res.status(404).json({ error: 'Deposit tidak ditemukan' });
+            return res.status(404).json({ error: 'Deposit not found' });
         }
         
         deposit.status = status;
         deposit.adminNotes = adminNotes;
         deposit.processedAt = new Date();
-        await deposit.save();
         
-        // Jika disetujui, tambah balance user
         if (status === 'approved') {
-            const user = deposit.userId;
-            user.balance += deposit.amount;
-            await user.save();
+            // Add amount to user balance
+            deposit.userId.balance += deposit.amount;
+            await deposit.userId.save();
             
-            // Emit ke user
-            io.to(user._id.toString()).emit('depositApproved', {
+            // Notify user via socket
+            io.to(deposit.userId._id.toString()).emit('depositApproved', {
                 amount: deposit.amount,
-                newBalance: user.balance
+                newBalance: deposit.userId.balance
             });
         }
         
-        await logActivity(req.user.id, 'ADMIN_UPDATE_DEPOSIT', `${status} deposit ${deposit._id}`, req);
+        await deposit.save();
+        await logActivity(deposit.userId._id, 'DEPOSIT_' + status.toUpperCase(), `Deposit ${status} by admin`);
         
-        res.json({ deposit, message: `Deposit ${status}` });
+        res.json({ deposit });
     } catch (error) {
-        console.error('Admin update deposit error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin deposit update error:', error);
+        res.status(500).json({ error: 'Failed to update deposit' });
     }
 });
 
-// Admin - Get All Withdrawals
-app.get('/api/admin/withdrawals', authenticateAdmin, async (req, res) => {
+app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { status } = req.query;
         let query = {};
@@ -1166,209 +884,136 @@ app.get('/api/admin/withdrawals', authenticateAdmin, async (req, res) => {
         
         res.json({ withdrawals });
     } catch (error) {
-        console.error('Admin get withdrawals error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin withdrawals error:', error);
+        res.status(500).json({ error: 'Failed to load withdrawals' });
     }
 });
 
-// Admin - Update Withdrawal Status
-app.put('/api/admin/withdrawal/:id', authenticateAdmin, async (req, res) => {
+app.put('/api/admin/withdrawal/:withdrawalId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { status, adminNotes } = req.body;
         
-        const withdrawal = await Withdrawal.findById(req.params.id).populate('userId');
-        if (!withdrawal) {
-            return res.status(404).json({ error: 'Withdrawal tidak ditemukan' });
-        }
+        const withdrawal = await Withdrawal.findById(req.params.withdrawalId).populate('userId');
         
-        // Jika ditolak, kembalikan saldo ke user
-        if (status === 'rejected' && withdrawal.status === 'pending') {
-            const user = withdrawal.userId;
-            user.balance += withdrawal.amount;
-            await user.save();
+        if (!withdrawal) {
+            return res.status(404).json({ error: 'Withdrawal not found' });
         }
         
         withdrawal.status = status;
         withdrawal.adminNotes = adminNotes;
         withdrawal.processedAt = new Date();
+        
+        if (status === 'rejected') {
+            // Refund amount to user balance
+            withdrawal.userId.balance += withdrawal.amount;
+            await withdrawal.userId.save();
+        }
+        
         await withdrawal.save();
+        await logActivity(withdrawal.userId._id, 'WITHDRAWAL_' + status.toUpperCase(), `Withdrawal ${status} by admin`);
         
-        await logActivity(req.user.id, 'ADMIN_UPDATE_WITHDRAWAL', `${status} withdrawal ${withdrawal._id}`, req);
-        
-        res.json({ withdrawal, message: `Withdrawal ${status}` });
+        res.json({ withdrawal });
     } catch (error) {
-        console.error('Admin update withdrawal error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Admin withdrawal update error:', error);
+        res.status(500).json({ error: 'Failed to update withdrawal' });
     }
 });
 
-// ===========================================
-// SOCKET.IO CONNECTION HANDLER
-// ===========================================
-
+// Socket.IO connection handling
 io.on('connection', (socket) => {
     console.log('👤 User connected:', socket.id);
     
-    // Join user room (untuk notifikasi personal)
     socket.on('join', (userId) => {
         socket.join(userId);
         console.log(`👤 User ${userId} joined room`);
     });
     
-    // Subscribe to price updates
     socket.on('subscribe_prices', () => {
-        socket.emit('priceUpdate', cryptoPrices);
+        console.log('📊 User subscribed to price updates');
     });
     
-    // Handle disconnect
     socket.on('disconnect', () => {
         console.log('👤 User disconnected:', socket.id);
     });
 });
 
-// ===========================================
-// INISIALISASI ADMIN USER
-// ===========================================
-
-async function initializeAdmin() {
-    try {
-        const adminEmail = 'admin@tradestation.com';
-        const existingAdmin = await User.findOne({ email: adminEmail });
-        
-        if (!existingAdmin) {
-            const hashedPassword = await bcrypt.hash('admin123', 10);
-            
-            const admin = new User({
-                name: 'Administrator',
-                email: adminEmail,
-                password: hashedPassword,
-                balance: 0,
-                accountType: 'premium',
-                isActive: true,
-                referralCode: 'ADMIN001'
-            });
-            
-            await admin.save();
-            console.log('✅ Admin user created successfully');
-        } else {
-            console.log('✅ Admin user already exists');
-        }
-    } catch (error) {
-        console.error('❌ Error creating admin user:', error);
+// Database connection
+mongoose.connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(async () => {
+    console.log('✅ Connected to MongoDB');
+    
+    // Initialize default admin user
+    const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
+    if (!adminExists) {
+        const hashedPassword = await bcrypt.hash('admin123', 12);
+        const admin = new User({
+            name: 'Administrator',
+            email: 'admin@tradestation.com',
+            password: hashedPassword,
+            balance: 0,
+            accountType: 'premium',
+            referralCode: 'ADMIN001'
+        });
+        await admin.save();
+        console.log('✅ Default admin user created');
     }
-}
-
-// ===========================================
-// ERROR HANDLERS & 404
-// ===========================================
-
-// CORS preflight handler untuk semua routes
-app.use((req, res, next) => {
-    if (req.method === 'OPTIONS') {
-        res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-        res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
-        res.header('Access-Control-Allow-Credentials', 'true');
-        return res.sendStatus(200);
-    }
-    next();
-});
-
-// Debug endpoint untuk testing CORS
-app.get('/api/test-cors', (req, res) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.json({
-        message: 'CORS test successful!',
-        origin: req.headers.origin,
-        userAgent: req.headers['user-agent'],
-        timestamp: new Date().toISOString(),
-        ip: req.ip
-    });
-});
-
-// Handle 404
-app.use('*', (req, res) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    console.log(`404 - Route not found: ${req.method} ${req.originalUrl}`);
-    res.status(404).json({ 
-        error: 'API endpoint tidak ditemukan',
-        path: req.originalUrl,
-        method: req.method,
-        availableEndpoints: [
-            'GET /api/health',
-            'POST /api/login', 
-            'POST /api/register',
-            'GET /api/prices',
-            'POST /api/trade'
-        ]
-    });
+    
+    // Initialize prices
+    await initializePrices();
+    console.log('✅ Prices initialized');
+    
+    // Start price updates and trade checking
+    simulatePriceUpdates();
+    checkTradesToComplete();
+    console.log('✅ Background processes started');
+})
+.catch((error) => {
+    console.error('❌ MongoDB connection error:', error);
+    process.exit(1);
 });
 
 // Global error handler
 app.use((error, req, res, next) => {
-    console.error('Global error:', error);
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.status(500).json({ 
-        error: 'Internal server error',
-        message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
-    });
+    console.error('❌ Global error:', error);
+    res.status(500).json({ error: 'Internal server error' });
 });
 
-// ===========================================
-// START SERVER
-// ===========================================
-
-server.listen(PORT, async () => {
-    console.log('🚀 ========================================');
-    console.log('🚀 TradeStation Server Started Successfully!');
-    console.log('🚀 ========================================');
-    console.log(`📡 Server running on port: ${PORT}`);
-    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Database: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Connecting...'}`);
-    console.log(`💰 Crypto prices: Auto-updating every 2 seconds`);
-    console.log(`⚡ Trading engine: Processing active trades every 1 second`);
-    console.log(`🛡️  CORS enabled for multiple origins including ts-traderstation.com`);
-    console.log(`📊 Health check: GET /api/health`);
-    console.log(`🔍 CORS test: GET /api/test-cors`);
-    console.log('🚀 ========================================');
-    
-    // Initialize admin user
-    await initializeAdmin();
-    
-    // Test database connection
-    try {
-        await mongoose.connection.db.admin().ping();
-        console.log('✅ Database ping successful');
-    } catch (error) {
-        console.error('❌ Database ping failed:', error.message);
-    }
-    
-    console.log('✅ All systems ready and operational!');
-    console.log('🚀 ========================================');
+// 404 handler
+app.use('*', (req, res) => {
+    res.status(404).json({ error: 'Route not found' });
 });
 
-// Handle server shutdown gracefully
+// Start server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`
+🚀 TradeStation Backend Server Started!
+📍 Port: ${PORT}
+🌍 Environment: ${process.env.NODE_ENV || 'development'}
+📡 Socket.IO: Enabled
+🛡️  Security: Enabled
+⏰ Timestamp: ${new Date().toISOString()}
+`);
+});
+
+// Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('🛑 SIGTERM received. Shutting down gracefully...');
-    server.close(async () => {
-        console.log('💤 HTTP server closed');
-        await mongoose.connection.close();
-        console.log('🔌 Database connection closed');
-        process.exit(0);
+    console.log('💤 SIGTERM received, shutting down gracefully');
+    server.close(() => {
+        console.log('✅ Process terminated');
+        mongoose.connection.close();
     });
 });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    process.exit(1);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Unhandled Rejection:', error);
-    process.exit(1);
+process.on('SIGINT', () => {
+    console.log('💤 SIGINT received, shutting down gracefully');
+    server.close(() => {
+        console.log('✅ Process terminated');
+        mongoose.connection.close();
+    });
 });
 
 module.exports = app;
