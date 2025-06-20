@@ -328,20 +328,23 @@ function checkTradesToComplete() {
     }, 1000); // Check every second
 }
 
+// Database connection check middleware
+const checkDatabaseConnection = (req, res, next) => {
+    if (global.dbConnected === false) {
+        return res.status(503).json({ 
+            error: 'Database temporarily unavailable',
+            message: 'Please try again in a few moments'
+        });
+    }
+    next();
+};
+
 // API Routes
 
-// Health check
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        message: 'TradeStation Backend is running',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development'
-    });
-});
+// Health check - moved to server startup section
 
 // Auth Routes
-app.post('/api/register', authLimiter, async (req, res) => {
+app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
@@ -401,7 +404,7 @@ app.post('/api/register', authLimiter, async (req, res) => {
     }
 });
 
-app.post('/api/login', authLimiter, async (req, res) => {
+app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { email, password } = req.body;
         
@@ -937,42 +940,76 @@ io.on('connection', (socket) => {
     });
 });
 
-// Database connection
-mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(async () => {
-    console.log('✅ Connected to MongoDB');
-    
-    // Initialize default admin user
-    const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
-    if (!adminExists) {
-        const hashedPassword = await bcrypt.hash('admin123', 12);
-        const admin = new User({
-            name: 'Administrator',
-            email: 'admin@tradestation.com',
-            password: hashedPassword,
-            balance: 0,
-            accountType: 'premium',
-            referralCode: 'ADMIN001'
+// Start server first, then connect to database
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', async () => {
+    console.log(`
+🚀 TradeStation Backend Server Started!
+📍 Port: ${PORT}
+🌍 Environment: ${process.env.NODE_ENV || 'development'}
+📡 Socket.IO: Enabled
+🛡️  Security: Enabled
+⏰ Timestamp: ${new Date().toISOString()}
+`);
+
+    // Connect to database after server starts
+    try {
+        await mongoose.connect(process.env.MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            serverSelectionTimeoutMS: 10000, // 10 second timeout
+            socketTimeoutMS: 45000, // 45 second timeout
         });
-        await admin.save();
-        console.log('✅ Default admin user created');
+        
+        console.log('✅ Connected to MongoDB');
+        
+        // Initialize default admin user
+        const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
+        if (!adminExists) {
+            const hashedPassword = await bcrypt.hash('admin123', 12);
+            const admin = new User({
+                name: 'Administrator',
+                email: 'admin@tradestation.com',
+                password: hashedPassword,
+                balance: 0,
+                accountType: 'premium',
+                referralCode: 'ADMIN001'
+            });
+            await admin.save();
+            console.log('✅ Default admin user created');
+        }
+        
+        // Initialize prices
+        await initializePrices();
+        console.log('✅ Prices initialized');
+        
+        // Start price updates and trade checking
+        simulatePriceUpdates();
+        checkTradesToComplete();
+        console.log('✅ Background processes started');
+        
+    } catch (error) {
+        console.error('❌ MongoDB connection error:', error);
+        console.error('❌ Server will continue running but database features will be unavailable');
+        
+        // Don't exit, let server run for health checks
+        // Add a flag to indicate DB is not available
+        global.dbConnected = false;
     }
+});
+
+// Health check that works even without DB
+app.get('/api/health', (req, res) => {
+    const health = {
+        status: 'OK', 
+        message: 'TradeStation Backend is running',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        database: global.dbConnected !== false ? 'Connected' : 'Disconnected',
+        port: PORT
+    };
     
-    // Initialize prices
-    await initializePrices();
-    console.log('✅ Prices initialized');
-    
-    // Start price updates and trade checking
-    simulatePriceUpdates();
-    checkTradesToComplete();
-    console.log('✅ Background processes started');
-})
-.catch((error) => {
-    console.error('❌ MongoDB connection error:', error);
-    process.exit(1);
+    res.json(health);
 });
 
 // Global error handler
@@ -986,18 +1023,7 @@ app.use('*', (req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-// Start server
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`
-🚀 TradeStation Backend Server Started!
-📍 Port: ${PORT}
-🌍 Environment: ${process.env.NODE_ENV || 'development'}
-📡 Socket.IO: Enabled
-🛡️  Security: Enabled
-⏰ Timestamp: ${new Date().toISOString()}
-`);
-});
+// Graceful shutdown (moved after server start)
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
