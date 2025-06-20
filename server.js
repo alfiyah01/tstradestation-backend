@@ -53,7 +53,7 @@ const authLimiter = rateLimit({
     message: 'Too many authentication attempts, please try again later.'
 });
 
-// Database Models - UPDATED dengan Bank Data
+// Database Models - UPDATED dengan Profit Settings
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -71,11 +71,12 @@ const userSchema = new mongoose.Schema({
         accountNumber: { type: String },
         accountHolder: { type: String }
     },
-    // Admin Settings untuk User Trading
+    // Admin Settings untuk User Trading - UPDATED
     adminSettings: {
         forceWin: { type: Boolean, default: false },
         forceWinRate: { type: Number, default: 0 }, // 0-100%, digunakan jika forceWin true
-        profitCollapse: { type: String, enum: ['profit', 'collapse', 'normal'], default: 'normal' }
+        profitCollapse: { type: String, enum: ['profit', 'collapse', 'normal'], default: 'normal' },
+        profitPercentage: { type: Number, default: 80 } // Default 80% profit
     },
     stats: {
         totalTrades: { type: Number, default: 0 },
@@ -96,12 +97,12 @@ const bankAccountSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
+// UPDATED: Trade Schema - hilangkan profitPercentage karena akan diambil dari user settings
 const tradeSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     symbol: { type: String, required: true },
     direction: { type: String, enum: ['buy', 'sell'], required: true },
     amount: { type: Number, required: true },
-    profitPercentage: { type: Number, required: true },
     duration: { type: Number, required: true }, // in seconds
     entryPrice: { type: Number, required: true },
     exitPrice: { type: Number },
@@ -111,6 +112,7 @@ const tradeSchema = new mongoose.Schema({
     priceChangePercent: { type: Number },
     forceResult: { type: String }, // admin override
     adminForced: { type: Boolean, default: false }, // flag untuk admin control
+    profitPercentage: { type: Number }, // Diambil dari user settings saat trade dibuat
     createdAt: { type: Date, default: Date.now },
     completedAt: { type: Date }
 });
@@ -275,7 +277,7 @@ function simulatePriceUpdates() {
     }, 3000); // Update every 3 seconds
 }
 
-// Trade completion checker dengan Admin Settings
+// UPDATED: Trade completion checker dengan Profit Settings dari User
 function checkTradesToComplete() {
     setInterval(async () => {
         try {
@@ -336,9 +338,11 @@ function checkTradesToComplete() {
                         
                         trade.result = result;
                         
-                        // Calculate payout
+                        // Calculate payout menggunakan profit percentage dari user settings
+                        const profitPercentage = trade.profitPercentage || trade.userId.adminSettings.profitPercentage || 80;
+                        
                         if (result === 'win') {
-                            trade.payout = trade.amount + (trade.amount * trade.profitPercentage / 100);
+                            trade.payout = trade.amount + (trade.amount * profitPercentage / 100);
                             trade.userId.balance += trade.payout;
                             trade.userId.totalProfit += (trade.payout - trade.amount);
                         } else {
@@ -346,7 +350,7 @@ function checkTradesToComplete() {
                             trade.userId.totalLoss += trade.amount;
                         }
                         
-                        // Update user stats (tanpa winRate)
+                        // Update user stats
                         trade.userId.stats.totalTrades += 1;
                         if (result === 'win') {
                             trade.userId.stats.winTrades += 1;
@@ -360,7 +364,7 @@ function checkTradesToComplete() {
                         // Log activity
                         await logActivity(trade.userId._id, 'TRADE_COMPLETED', `${trade.symbol} ${trade.direction} ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
                         
-                        // Notify user via socket
+                        // UPDATED: Notify user via socket dengan profit/collapse
                         io.to(trade.userId._id.toString()).emit('tradeCompleted', {
                             trade,
                             result,
@@ -393,9 +397,9 @@ const checkDatabaseConnection = (req, res, next) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '2.0.0',
+        version: '2.1.0',
         status: 'Running',
-        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control'],
+        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management'],
         endpoints: {
             health: '/api/health',
             register: 'POST /api/register',
@@ -424,7 +428,7 @@ app.get('/api/health', (req, res) => {
     res.json(health);
 });
 
-// Auth Routes - UPDATED untuk support email/phone
+// Auth Routes
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
@@ -463,14 +467,17 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 12);
         
-        // Create user
+        // Create user dengan default profit settings
         const user = new User({
             name,
             email: userEmail,
             phone,
             password: hashedPassword,
             referralCode: generateReferralCode(),
-            balance: 0
+            balance: 0,
+            adminSettings: {
+                profitPercentage: 80 // Default 80%
+            }
         });
         
         await user.save();
@@ -584,7 +591,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
     }
 });
 
-// Bank Data Routes - BARU
+// Bank Data Routes
 app.get('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
         const user = await User.findById(req.userId).select('bankData');
@@ -614,7 +621,7 @@ app.put('/api/profile/bank', authenticateToken, async (req, res) => {
     }
 });
 
-// Active Bank Accounts untuk Deposit - BARU
+// Active Bank Accounts untuk Deposit
 app.get('/api/bank-accounts/active', async (req, res) => {
     try {
         const accounts = await BankAccount.find({ isActive: true });
@@ -635,13 +642,13 @@ app.get('/api/prices', async (req, res) => {
     }
 });
 
-// Trading Routes
+// UPDATED: Trading Routes - tanpa profitPercentage
 app.post('/api/trade', authenticateToken, async (req, res) => {
     try {
-        const { symbol, direction, amount, profitPercentage, duration } = req.body;
+        const { symbol, direction, amount, duration } = req.body; // Hilangkan profitPercentage
         
         // Validation
-        if (!symbol || !direction || !amount || !profitPercentage || !duration) {
+        if (!symbol || !direction || !amount || !duration) {
             return res.status(400).json({ error: 'All fields are required' });
         }
         
@@ -659,17 +666,20 @@ app.post('/api/trade', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Invalid symbol' });
         }
         
+        // Get profit percentage dari user settings
+        const profitPercentage = req.user.adminSettings?.profitPercentage || 80;
+        
         // Deduct amount from user balance
         req.user.balance -= amount;
         await req.user.save();
         
-        // Create trade
+        // Create trade dengan profit percentage dari user settings
         const trade = new Trade({
             userId: req.userId,
             symbol,
             direction,
             amount,
-            profitPercentage,
+            profitPercentage, // Diambil dari user settings
             duration,
             entryPrice: currentPrice.price
         });
@@ -717,7 +727,7 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
     }
 });
 
-// Deposit Routes - UPDATED dengan File Upload
+// Deposit Routes
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
         const { amount, receipt, fileName, fileType } = req.body;
@@ -772,7 +782,7 @@ app.get('/api/deposits', authenticateToken, async (req, res) => {
     }
 });
 
-// Withdrawal Routes - UPDATED dengan Bank Data
+// Withdrawal Routes
 app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
         const { amount } = req.body;
@@ -835,7 +845,7 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     }
 });
 
-// Admin Routes - UPDATED dengan Trading Control dan Bank Management
+// Admin Routes
 app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
     try {
         // Get statistics
@@ -908,7 +918,7 @@ app.get('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req,
     }
 });
 
-// UPDATED: User Management dengan Trading Control
+// UPDATED: User Management dengan Profit Settings
 app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { name, email, balance, phone, accountType, isActive, adminSettings } = req.body;
@@ -924,7 +934,10 @@ app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, 
         
         // Update admin settings jika ada
         if (adminSettings) {
-            updateData.adminSettings = adminSettings;
+            updateData.adminSettings = {
+                ...adminSettings,
+                profitPercentage: adminSettings.profitPercentage || 80 // Ensure default
+            };
         }
         
         const user = await User.findByIdAndUpdate(
@@ -942,30 +955,27 @@ app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, 
     }
 });
 
-// BARU: Trading Control untuk User
-app.put('/api/admin/user/:userId/trading-control', authenticateToken, requireAdmin, async (req, res) => {
+// BARU: Change Password untuk User
+app.put('/api/admin/user/:userId/password', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const { profitCollapse, forceWin, forceWinRate } = req.body;
+        const { newPassword } = req.body;
         
-        const user = await User.findByIdAndUpdate(
-            req.params.userId,
-            {
-                'adminSettings.profitCollapse': profitCollapse,
-                'adminSettings.forceWin': forceWin,
-                'adminSettings.forceWinRate': forceWinRate
-            },
-            { new: true }
-        ).select('-password');
+        if (!newPassword || newPassword.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        }
         
-        await logActivity(req.params.userId, 'ADMIN_TRADING_CONTROL', `Trading control updated: ${profitCollapse}`);
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
         
-        res.json({ 
-            message: 'Trading control updated',
-            user 
+        await User.findByIdAndUpdate(req.params.userId, {
+            password: hashedPassword
         });
+        
+        await logActivity(req.params.userId, 'ADMIN_PASSWORD_CHANGE', 'Password changed by admin');
+        
+        res.json({ message: 'Password changed successfully' });
     } catch (error) {
-        console.error('Admin trading control error:', error);
-        res.status(500).json({ error: 'Failed to update trading control' });
+        console.error('Admin password change error:', error);
+        res.status(500).json({ error: 'Failed to change password' });
     }
 });
 
@@ -1117,7 +1127,7 @@ app.put('/api/admin/withdrawal/:withdrawalId', authenticateToken, requireAdmin, 
     }
 });
 
-// BARU: Bank Account Management Routes
+// Bank Account Management Routes
 app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const accounts = await BankAccount.find().sort({ createdAt: -1 });
@@ -1234,6 +1244,8 @@ server.listen(PORT, '0.0.0.0', async () => {
 🛡️  Security: Enabled
 💳 Bank Management: Enabled
 🎯 Trading Control: Enabled
+💰 Profit Settings: Enabled
+🔐 Password Management: Enabled
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
@@ -1259,7 +1271,10 @@ server.listen(PORT, '0.0.0.0', async () => {
                 password: hashedPassword,
                 balance: 0,
                 accountType: 'premium',
-                referralCode: 'ADMIN001'
+                referralCode: 'ADMIN001',
+                adminSettings: {
+                    profitPercentage: 80
+                }
             });
             await admin.save();
             console.log('✅ Default admin user created');
