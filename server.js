@@ -361,6 +361,111 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.post('/api/bootstrap/admin', async (req, res) => {
+  try {
+    console.log('🚀 Bootstrap: Creating admin user...');
+    
+    // Cek apakah admin sudah ada
+    const existingAdmin = await User.findOne({ email: 'admin@tradestation.com' });
+    if (existingAdmin) {
+      console.log('✅ Admin already exists');
+      return res.json({
+        status: 'exists',
+        message: 'Admin user already exists',
+        credentials: {
+          email: 'admin@tradestation.com',
+          password: 'admin123'
+        }
+      });
+    }
+    
+    // Hash password
+    const hashedPassword = await bcrypt.hash('admin123', 12);
+    console.log('🔐 Password hashed');
+    
+    // Buat admin user
+    const adminUser = await User.create({
+      email: 'admin@tradestation.com',
+      password: hashedPassword,
+      name: 'Administrator',
+      phone: null,
+      accountType: 'premium',
+      balance: 0,
+      totalProfit: 0,
+      totalLoss: 0,
+      totalTrades: 0,
+      winTrades: 0,
+      loseTrades: 0,
+      isActive: true,
+      referralCode: 'ADMIN2024',
+      referredBy: null,
+      bankAccount: {
+        bankName: null,
+        accountNumber: null,
+        accountHolder: null
+      },
+      lastLoginAt: new Date(),
+      ipAddress: req.ip || '127.0.0.1',
+      deviceInfo: 'Bootstrap Creation',
+      createdAt: new Date()
+    });
+    
+    console.log('✅ Admin user created:', adminUser._id);
+    
+    res.json({
+      status: 'created',
+      message: 'Admin user created successfully',
+      admin: {
+        id: adminUser._id,
+        email: adminUser.email,
+        name: adminUser.name
+      },
+      credentials: {
+        email: 'admin@tradestation.com',
+        password: 'admin123'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Bootstrap error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+// Debug endpoint untuk cek admin
+app.get('/api/debug/admin', async (req, res) => {
+  try {
+    const admin = await User.findOne({ email: 'admin@tradestation.com' });
+    
+    if (admin) {
+      res.json({
+        status: 'found',
+        admin: {
+          id: admin._id,
+          email: admin.email,
+          name: admin.name,
+          isActive: admin.isActive,
+          accountType: admin.accountType,
+          createdAt: admin.createdAt
+        }
+      });
+    } else {
+      res.json({
+        status: 'not_found',
+        message: 'Admin user not found'
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: error.message
+    });
+  }
+});
+
 app.get('/api/status', async (req, res) => {
   try {
     const [
