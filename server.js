@@ -16,15 +16,31 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
     cors: {
-        origin: [
-            "https://ts-traderstation.netlify.app",
-            "https://ts-traderstation.com",
-            "http://localhost:3000",
-            "http://localhost:5000"
-        ],
+        origin: function (origin, callback) {
+            const allowedOrigins = [
+                'https://ts-traderstation.com',
+                'http://ts-traderstation.com',
+                'https://www.ts-traderstation.com', 
+                'http://www.ts-traderstation.com',
+                'https://ts-traderstation.netlify.app',
+                'https://www.ts-traderstation.netlify.app',
+                'http://localhost:3000',
+                'http://localhost:5000'
+            ];
+            
+            if (!origin || allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(null, true); // Allow all for debugging
+            }
+        },
         methods: ["GET", "POST", "PUT", "DELETE"],
-        credentials: true
-    }
+        credentials: true,
+        allowEIO3: true
+    },
+    transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
 // Pengaturan port
@@ -37,31 +53,96 @@ const JWT_SECRET = process.env.JWT_SECRET || 'tradestation_secret_key_2024';
 // MIDDLEWARE (Penghubung Aplikasi)
 // ===========================================
 
-// Keamanan aplikasi
-app.use(helmet());
+// Trust proxy (penting untuk Railway)
+app.set('trust proxy', 1);
 
-// Mengizinkan akses dari domain tertentu
-app.use(cors({
-    origin: [
-        "https://ts-traderstation.netlify.app",
-        "https://ts-traderstation.com", 
-        "http://localhost:3000",
-        "http://localhost:5000"
-    ],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+// Keamanan aplikasi dengan konfigurasi yang lebih permissive
+app.use(helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
+
+// CORS Configuration yang lebih komprehensif
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) return callback(null, true);
+        
+        const allowedOrigins = [
+            'https://ts-traderstation.com',
+            'http://ts-traderstation.com',
+            'https://www.ts-traderstation.com', 
+            'http://www.ts-traderstation.com',
+            'https://ts-traderstation.netlify.app',
+            'https://www.ts-traderstation.netlify.app',
+            'http://localhost:3000',
+            'http://localhost:5000',
+            'http://127.0.0.1:3000',
+            'http://127.0.0.1:5000'
+        ];
+        
+        if (allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            console.log('CORS blocked origin:', origin);
+            callback(null, true); // Allow all for debugging - change to false in production
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'Accept', 
+        'Origin', 
+        'X-Requested-With',
+        'Access-Control-Allow-Origin',
+        'Access-Control-Allow-Headers',
+        'Access-Control-Allow-Methods'
+    ],
+    exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
+    optionsSuccessStatus: 200,
+    preflightContinue: false
+};
+
+// Apply CORS
+app.use(cors(corsOptions));
+
+// Handle preflight requests explicitly
+app.options('*', cors(corsOptions));
+
+// Additional CORS headers for stubborn browsers
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
 
 // Membaca data JSON dari request
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Membatasi jumlah request (mencegah spam)
+// Logging middleware
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
+    next();
+});
+
+// Membatasi jumlah request (mencegah spam) - lebih permissive untuk testing
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 menit
-    max: 100, // maksimal 100 request per 15 menit
-    message: { error: 'Terlalu banyak request, coba lagi nanti' }
+    max: 200, // maksimal 200 request per 15 menit (dinaikkan untuk testing)
+    message: { error: 'Terlalu banyak request, coba lagi nanti' },
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 app.use('/api/', limiter);
 
@@ -69,15 +150,42 @@ app.use('/api/', limiter);
 // KONEKSI DATABASE MONGODB
 // ===========================================
 
-const MONGODB_URI = 'mongodb+srv://tradestation:Yusrizal1993@clustertrading.7jozj2u.mongodb.net/tradestation?retryWrites=true&w=majority&appName=Clustertrading';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://tradestation:Yusrizal1993@clustertrading.7jozj2u.mongodb.net/tradestation?retryWrites=true&w=majority&appName=Clustertrading';
 
+// MongoDB connection with better error handling
 mongoose.connect(MONGODB_URI, {
     useNewUrlParser: true,
-    useUnifiedTopology: true
+    useUnifiedTopology: true,
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+    family: 4
 }).then(() => {
     console.log('✅ Database MongoDB berhasil terhubung');
+    console.log('📊 Database name:', mongoose.connection.name);
 }).catch((error) => {
-    console.error('❌ Error koneksi database:', error);
+    console.error('❌ Error koneksi database:', error.message);
+    // Don't exit process, let it try to reconnect
+});
+
+// MongoDB connection event handlers
+mongoose.connection.on('connected', () => {
+    console.log('🔗 MongoDB connected successfully');
+});
+
+mongoose.connection.on('error', (error) => {
+    console.error('❌ MongoDB connection error:', error.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('🔌 MongoDB disconnected');
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+    await mongoose.connection.close();
+    console.log('🔌 MongoDB connection closed through app termination');
+    process.exit(0);
 });
 
 // ===========================================
@@ -353,13 +461,59 @@ setInterval(processExpiredTrades, 1000);
 // API ROUTES - AUTHENTICATION
 // ===========================================
 
-// Health Check
+// Health Check - Enhanced
 app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
+    // Set CORS headers explicitly for health check
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    const healthData = {
+        status: 'OK',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        message: 'TradeStation API is running'
+        uptime: Math.floor(process.uptime()),
+        message: 'TradeStation API is running perfectly!',
+        environment: process.env.NODE_ENV || 'development',
+        database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+        version: '1.0.0',
+        cors: 'Enabled',
+        endpoints: {
+            auth: '/api/login, /api/register',
+            trading: '/api/trade, /api/prices',
+            admin: '/api/admin/*'
+        }
+    };
+    
+    console.log('Health check requested from:', req.headers.origin || req.ip);
+    res.status(200).json(healthData);
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.json({ 
+        message: 'TradeStation API Server', 
+        status: 'Running',
+        docs: '/api/health for health check'
+    });
+});
+
+// API root
+app.get('/api', (req, res) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.json({ 
+        message: 'TradeStation API v1.0.0', 
+        status: 'Active',
+        endpoints: {
+            health: '/api/health',
+            auth: '/api/login, /api/register, /api/profile',
+            prices: '/api/prices',
+            trading: '/api/trade, /api/trades',
+            deposits: '/api/deposit, /api/deposits',
+            withdrawals: '/api/withdrawal, /api/withdrawals',
+            admin: '/api/admin/*'
+        }
     });
 });
 
@@ -1108,15 +1262,57 @@ async function initializeAdmin() {
 // ERROR HANDLERS & 404
 // ===========================================
 
+// CORS preflight handler untuk semua routes
+app.use((req, res, next) => {
+    if (req.method === 'OPTIONS') {
+        res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+        res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        return res.sendStatus(200);
+    }
+    next();
+});
+
+// Debug endpoint untuk testing CORS
+app.get('/api/test-cors', (req, res) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.json({
+        message: 'CORS test successful!',
+        origin: req.headers.origin,
+        userAgent: req.headers['user-agent'],
+        timestamp: new Date().toISOString(),
+        ip: req.ip
+    });
+});
+
 // Handle 404
 app.use('*', (req, res) => {
-    res.status(404).json({ error: 'API endpoint tidak ditemukan' });
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    console.log(`404 - Route not found: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ 
+        error: 'API endpoint tidak ditemukan',
+        path: req.originalUrl,
+        method: req.method,
+        availableEndpoints: [
+            'GET /api/health',
+            'POST /api/login', 
+            'POST /api/register',
+            'GET /api/prices',
+            'POST /api/trade'
+        ]
+    });
 });
 
 // Global error handler
 app.use((error, req, res, next) => {
     console.error('Global error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.status(500).json({ 
+        error: 'Internal server error',
+        message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
 });
 
 // ===========================================
@@ -1124,26 +1320,55 @@ app.use((error, req, res, next) => {
 // ===========================================
 
 server.listen(PORT, async () => {
-    console.log('🚀 TradeStation Server started successfully!');
+    console.log('🚀 ========================================');
+    console.log('🚀 TradeStation Server Started Successfully!');
+    console.log('🚀 ========================================');
     console.log(`📡 Server running on port: ${PORT}`);
-    console.log(`🔗 Database: Connected to MongoDB`);
+    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 Database: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Connecting...'}`);
     console.log(`💰 Crypto prices: Auto-updating every 2 seconds`);
-    console.log(`⚡ Trading engine: Processing active trades`);
-    console.log(`🌐 CORS enabled for: ts-traderstation.com & ts-traderstation.netlify.app`);
+    console.log(`⚡ Trading engine: Processing active trades every 1 second`);
+    console.log(`🛡️  CORS enabled for multiple origins including ts-traderstation.com`);
+    console.log(`📊 Health check: GET /api/health`);
+    console.log(`🔍 CORS test: GET /api/test-cors`);
+    console.log('🚀 ========================================');
     
     // Initialize admin user
     await initializeAdmin();
     
-    console.log('✅ All systems ready!');
+    // Test database connection
+    try {
+        await mongoose.connection.db.admin().ping();
+        console.log('✅ Database ping successful');
+    } catch (error) {
+        console.error('❌ Database ping failed:', error.message);
+    }
+    
+    console.log('✅ All systems ready and operational!');
+    console.log('🚀 ========================================');
 });
 
 // Handle server shutdown gracefully
 process.on('SIGTERM', () => {
     console.log('🛑 SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-        console.log('💤 Server closed');
+    server.close(async () => {
+        console.log('💤 HTTP server closed');
+        await mongoose.connection.close();
+        console.log('🔌 Database connection closed');
         process.exit(0);
     });
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (error) => {
+    console.error('❌ Unhandled Rejection:', error);
+    process.exit(1);
 });
 
 module.exports = app;
