@@ -339,6 +339,26 @@ const checkDatabaseConnection = (req, res, next) => {
     next();
 };
 
+// Root route
+app.get('/', (req, res) => {
+    res.json({
+        message: 'TradeStation Backend API',
+        version: '1.0.0',
+        status: 'Running',
+        endpoints: {
+            health: '/api/health',
+            register: 'POST /api/register',
+            login: 'POST /api/login',
+            prices: 'GET /api/prices',
+            profile: 'GET /api/profile (auth required)',
+            trading: 'POST /api/trade (auth required)',
+            admin: '/api/admin/* (admin required)'
+        },
+        documentation: 'https://github.com/tradestation/api-docs',
+        timestamp: new Date().toISOString()
+    });
+});
+
 // API Routes
 
 // Health check - moved to server startup section
