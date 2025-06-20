@@ -1,4 +1,4 @@
-// server.js - Backend untuk Trading Platform (Fixed Version)
+// server.js - Backend untuk Trading Platform (Fixed Admin Login)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -24,7 +24,7 @@ const PRICE_UPDATE_INTERVAL = parseInt(process.env.PRICE_UPDATE_INTERVAL) || 200
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@tradestation.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
-// Fixed CORS Origins (tidak dari environment variable)
+// Fixed CORS Origins
 const CORS_ORIGINS = [
   "https://ts-traderstation.com",
   "https://ts-traderstation.netlify.app",
@@ -44,6 +44,7 @@ console.log(`- Port: ${PORT}`);
 console.log(`- Frontend URL: ${FRONTEND_URL}`);
 console.log(`- Admin URL: ${ADMIN_URL}`);
 console.log(`- CORS Origins: ${CORS_ORIGINS.join(', ')}`);
+console.log(`- Admin Email: ${ADMIN_EMAIL}`);
 console.log(`- Min Trade Amount: Rp ${MIN_TRADE_AMOUNT.toLocaleString('id-ID')}`);
 console.log(`- Max Trade Amount: Rp ${MAX_TRADE_AMOUNT.toLocaleString('id-ID')}`);
 console.log(`- Default Win Rate: ${DEFAULT_WIN_RATE}%`);
@@ -490,25 +491,34 @@ app.post('/api/register', rateLimit(10, 600000), async (req, res) => {
   }
 });
 
+// Fixed Login Route with better validation
 app.post('/api/login', rateLimit(20, 600000), async (req, res) => {
   try {
     const { email, password } = req.body;
     
+    console.log(`🔐 Login attempt for: ${email}`);
+    
     if (!email || !password) {
+      console.log('❌ Missing email or password');
       return res.status(400).json({ error: 'Email and password are required' });
     }
     
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
+      console.log(`❌ User not found: ${email}`);
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
+    console.log(`🔍 User found: ${user.name} (${user.email})`);
+
     if (!user.isActive) {
+      console.log(`❌ Account suspended: ${email}`);
       return res.status(400).json({ error: 'Account is suspended' });
     }
 
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
+      console.log(`❌ Invalid password for: ${email}`);
       logActivity(user._id, 'LOGIN_FAILED', 'Invalid password attempt', {}, req);
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -527,6 +537,8 @@ app.post('/api/login', rateLimit(20, 600000), async (req, res) => {
     
     logActivity(user._id, 'USER_LOGIN', 'User logged in', {}, req);
 
+    console.log(`✅ Login successful for: ${email}`);
+
     res.json({
       token,
       user: {
@@ -539,7 +551,7 @@ app.post('/api/login', rateLimit(20, 600000), async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -1480,24 +1492,41 @@ function updatePrices() {
   }, PRICE_UPDATE_INTERVAL);
 }
 
-// Create admin user
+// Create admin user - Fixed function
 async function createAdminUser() {
   try {
     const adminExists = await User.findOne({ email: ADMIN_EMAIL });
     if (!adminExists) {
       const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
-      await User.create({
+      const adminUser = await User.create({
         name: 'Administrator',
         email: ADMIN_EMAIL,
         password: hashedPassword,
         accountType: 'premium',
         balance: 0,
         isActive: true,
-        referralCode: 'ADMIN2024'
+        referralCode: 'ADMIN2024',
+        lastLoginAt: new Date(),
+        createdAt: new Date()
       });
       console.log(`✅ Admin user created: ${ADMIN_EMAIL}`);
+      console.log(`🔑 Admin ID: ${adminUser._id}`);
+      console.log(`🔐 Admin Password Hash: ${hashedPassword.substring(0, 20)}...`);
     } else {
       console.log('✅ Admin user already exists');
+      console.log(`🔑 Admin ID: ${adminExists._id}`);
+      
+      // Verify password hash
+      const isValidPassword = await bcrypt.compare(ADMIN_PASSWORD, adminExists.password);
+      console.log(`🔐 Password verification: ${isValidPassword ? 'Valid' : 'Invalid'}`);
+      
+      if (!isValidPassword) {
+        console.log('🔄 Updating admin password...');
+        const newHashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 12);
+        adminExists.password = newHashedPassword;
+        await adminExists.save();
+        console.log('✅ Admin password updated');
+      }
     }
   } catch (error) {
     console.error('❌ Error creating admin user:', error);
@@ -1628,6 +1657,7 @@ async function startServer() {
       console.log(`📈 API Status: http://localhost:${PORT}/api/status`);
       console.log(`🔗 Frontend: ${FRONTEND_URL}`);
       console.log(`👤 Admin Panel: ${ADMIN_URL}`);
+      console.log(`🔑 Admin Login: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
       console.log(`🎯 Environment: ${NODE_ENV}`);
       console.log(`🕐 Started at: ${new Date().toISOString()}`);
       console.log('='.repeat(60) + '\n');
