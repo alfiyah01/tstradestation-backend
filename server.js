@@ -397,9 +397,9 @@ const checkDatabaseConnection = (req, res, next) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '2.1.0',
+        version: '2.2.0',
         status: 'Running',
-        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management'],
+        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management'],
         endpoints: {
             health: '/api/health',
             register: 'POST /api/register',
@@ -955,6 +955,91 @@ app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, 
     }
 });
 
+// PERBAIKAN 3: BANK DATA MANAGEMENT FOR USERS FROM ADMIN
+app.get('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const user = await User.findById(req.params.userId).select('bankData name email');
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({ 
+            user: {
+                _id: user._id,
+                name: user.name,
+                email: user.email
+            },
+            bankData: user.bankData || {} 
+        });
+    } catch (error) {
+        console.error('Admin user bank data error:', error);
+        res.status(500).json({ error: 'Failed to load user bank data' });
+    }
+});
+
+app.put('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { bankName, accountNumber, accountHolder } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            { 
+                bankData: { bankName, accountNumber, accountHolder }
+            },
+            { new: true }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.params.userId, 'ADMIN_BANK_UPDATE', `Bank data updated by admin: ${bankName}`);
+        
+        res.json({ 
+            message: 'User bank data updated successfully',
+            user: {
+                _id: user._id,
+                name: user.name,
+                email: user.email
+            },
+            bankData: user.bankData 
+        });
+    } catch (error) {
+        console.error('Admin user bank update error:', error);
+        res.status(500).json({ error: 'Failed to update user bank data' });
+    }
+});
+
+app.delete('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const user = await User.findByIdAndUpdate(
+            req.params.userId,
+            { 
+                $unset: { bankData: 1 }
+            },
+            { new: true }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.params.userId, 'ADMIN_BANK_DELETE', `Bank data deleted by admin`);
+        
+        res.json({ 
+            message: 'User bank data deleted successfully',
+            user: {
+                _id: user._id,
+                name: user.name,
+                email: user.email
+            }
+        });
+    } catch (error) {
+        console.error('Admin user bank delete error:', error);
+        res.status(500).json({ error: 'Failed to delete user bank data' });
+    }
+});
+
 // BARU: Change Password untuk User
 app.put('/api/admin/user/:userId/password', authenticateToken, requireAdmin, async (req, res) => {
     try {
@@ -1246,6 +1331,7 @@ server.listen(PORT, '0.0.0.0', async () => {
 🎯 Trading Control: Enabled
 💰 Profit Settings: Enabled
 🔐 Password Management: Enabled
+🏦 User Bank Data Management: Enabled
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
