@@ -165,6 +165,22 @@ const activitySchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
+// BARU: Chart Data Schema untuk menyimpan historical candlestick data
+const chartDataSchema = new mongoose.Schema({
+    symbol: { type: String, required: true },
+    timeframe: { type: String, required: true }, // 1m, 5m, 15m, 30m, 1h, 4h, 1d
+    time: { type: Number, required: true }, // Unix timestamp
+    open: { type: Number, required: true },
+    high: { type: Number, required: true },
+    low: { type: Number, required: true },
+    close: { type: Number, required: true },
+    volume: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
+});
+
+// Create compound index untuk efficient querying
+chartDataSchema.index({ symbol: 1, timeframe: 1, time: 1 }, { unique: true });
+
 // Create models
 const User = mongoose.model('User', userSchema);
 const BankAccount = mongoose.model('BankAccount', bankAccountSchema);
@@ -173,6 +189,11 @@ const Deposit = mongoose.model('Deposit', depositSchema);
 const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
 const Price = mongoose.model('Price', priceSchema);
 const Activity = mongoose.model('Activity', activitySchema);
+const ChartData = mongoose.model('ChartData', chartDataSchema);
+
+// BARU: Chart Data Management
+let chartDataStore = new Map(); // In-memory storage untuk real-time chart data
+let lastCandleTime = new Map(); // Track last candle time per symbol/timeframe
 
 // Helper functions
 function generateReferralCode() {
@@ -184,6 +205,111 @@ async function logActivity(userId, action, details = '') {
         await Activity.create({ userId, action, details });
     } catch (error) {
         console.error('Error logging activity:', error);
+    }
+}
+
+// BARU: Chart helper functions
+function getTimeframeMinutes(timeframe) {
+    const timeframes = {
+        '1m': 1,
+        '5m': 5,
+        '15m': 15,
+        '30m': 30,
+        '1h': 60,
+        '4h': 240,
+        '1d': 1440
+    };
+    return timeframes[timeframe] || 5;
+}
+
+function roundTimeToTimeframe(timestamp, timeframe) {
+    const minutes = getTimeframeMinutes(timeframe);
+    const roundedMinutes = Math.floor(timestamp / (minutes * 60 * 1000)) * minutes * 60 * 1000;
+    return roundedMinutes;
+}
+
+// Generate realistic OHLCV data dari current price
+function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle = null) {
+    const now = Date.now();
+    const roundedTime = roundTimeToTimeframe(now, timeframe);
+    
+    // Jika ini candle baru
+    if (!previousCandle || previousCandle.time < roundedTime) {
+        const volatility = 0.02; // 2% volatility
+        const randomChange = (Math.random() - 0.5) * volatility;
+        
+        const open = previousCandle ? previousCandle.close : currentPrice;
+        const close = currentPrice;
+        
+        // Generate realistic high and low
+        const high = Math.max(open, close) * (1 + Math.random() * volatility);
+        const low = Math.min(open, close) * (1 - Math.random() * volatility);
+        
+        const volume = Math.floor(Math.random() * 1000000) + 100000;
+        
+        return {
+            time: Math.floor(roundedTime / 1000), // Convert to seconds for TradingView
+            open: parseFloat(open.toFixed(8)),
+            high: parseFloat(high.toFixed(8)),
+            low: parseFloat(low.toFixed(8)),
+            close: parseFloat(close.toFixed(8)),
+            volume
+        };
+    } else {
+        // Update existing candle
+        return {
+            ...previousCandle,
+            close: parseFloat(currentPrice.toFixed(8)),
+            high: Math.max(previousCandle.high, currentPrice),
+            low: Math.min(previousCandle.low, currentPrice),
+            volume: previousCandle.volume + Math.floor(Math.random() * 10000)
+        };
+    }
+}
+
+// Generate historical chart data
+async function generateHistoricalData(symbol, timeframe, count = 100) {
+    try {
+        const currentPrice = await Price.findOne({ symbol });
+        if (!currentPrice) return [];
+        
+        const timeframeMs = getTimeframeMinutes(timeframe) * 60 * 1000;
+        const now = Date.now();
+        const data = [];
+        
+        let price = currentPrice.price;
+        
+        // Generate historical candles
+        for (let i = count; i >= 0; i--) {
+            const time = Math.floor((now - (i * timeframeMs)) / 1000);
+            
+            // Add some realistic price movement
+            const volatility = 0.01;
+            const priceChange = (Math.random() - 0.5) * volatility;
+            price = price * (1 + priceChange);
+            
+            const open = price;
+            const close = price * (1 + (Math.random() - 0.5) * volatility);
+            const high = Math.max(open, close) * (1 + Math.random() * volatility);
+            const low = Math.min(open, close) * (1 - Math.random() * volatility);
+            const volume = Math.floor(Math.random() * 1000000) + 100000;
+            
+            data.push({
+                time,
+                open: parseFloat(open.toFixed(8)),
+                high: parseFloat(high.toFixed(8)),
+                low: parseFloat(low.toFixed(8)),
+                close: parseFloat(close.toFixed(8)),
+                volume
+            });
+            
+            price = close; // Use close as next open
+        }
+        
+        return data;
+    } catch (error) {
+        console.error('Error generating historical data:', error);
+        return [];
     }
 }
 
@@ -246,7 +372,7 @@ async function initializePrices() {
     }
 }
 
-// Price update simulation
+// UPDATED: Price update simulation dengan chart updates
 function simulatePriceUpdates() {
     setInterval(async () => {
         try {
@@ -270,6 +396,39 @@ function simulatePriceUpdates() {
                     price: price.price,
                     change: price.change
                 });
+                
+                // BARU: Update chart data untuk setiap timeframe
+                const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+                
+                for (const timeframe of timeframes) {
+                    const key = `${price.symbol}-${timeframe}`;
+                    const currentCandles = chartDataStore.get(key) || [];
+                    const lastCandle = currentCandles[currentCandles.length - 1];
+                    
+                    const newCandle = generateCandleFromPrice(price.symbol, timeframe, price.price, lastCandle);
+                    
+                    // Update or add new candle
+                    if (lastCandle && lastCandle.time === newCandle.time) {
+                        // Update existing candle
+                        currentCandles[currentCandles.length - 1] = newCandle;
+                    } else {
+                        // Add new candle
+                        currentCandles.push(newCandle);
+                        // Keep only last 200 candles
+                        if (currentCandles.length > 200) {
+                            currentCandles.shift();
+                        }
+                    }
+                    
+                    chartDataStore.set(key, currentCandles);
+                    
+                    // Broadcast chart update
+                    io.emit('chartUpdate', {
+                        symbol: price.symbol,
+                        timeframe: timeframe,
+                        candle: newCandle
+                    });
+                }
             }
         } catch (error) {
             console.error('Error updating prices:', error);
@@ -397,9 +556,9 @@ const checkDatabaseConnection = (req, res, next) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '2.2.0',
+        version: '2.3.0',
         status: 'Running',
-        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management', 'Chart Data API'],
+        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management', 'Real-time Chart Data'],
         endpoints: {
             health: '/api/health',
             register: 'POST /api/register',
@@ -427,6 +586,50 @@ app.get('/api/health', (req, res) => {
     };
     
     res.json(health);
+});
+
+// BARU: Chart Data Routes
+app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
+    try {
+        const { symbol, timeframe } = req.params;
+        
+        console.log(`📊 Chart data requested: ${symbol}/${timeframe}`);
+        
+        // Validate timeframe
+        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+        if (!validTimeframes.includes(timeframe)) {
+            return res.status(400).json({ error: 'Invalid timeframe' });
+        }
+        
+        // Check if symbol exists
+        const priceData = await Price.findOne({ symbol });
+        if (!priceData) {
+            return res.status(404).json({ error: 'Symbol not found' });
+        }
+        
+        const key = `${symbol}-${timeframe}`;
+        let chartData = chartDataStore.get(key);
+        
+        // Jika belum ada data, generate historical data
+        if (!chartData || chartData.length === 0) {
+            console.log(`📊 Generating historical data for ${symbol}/${timeframe}`);
+            chartData = await generateHistoricalData(symbol, timeframe, 100);
+            chartDataStore.set(key, chartData);
+        }
+        
+        res.json({
+            symbol,
+            timeframe,
+            candlestick: chartData,
+            count: chartData.length
+        });
+        
+        console.log(`✅ Chart data sent: ${chartData.length} candles`);
+        
+    } catch (error) {
+        console.error('❌ Chart data error:', error);
+        res.status(500).json({ error: 'Failed to load chart data' });
+    }
 });
 
 // Auth Routes
@@ -640,71 +843,6 @@ app.get('/api/prices', async (req, res) => {
     } catch (error) {
         console.error('Prices error:', error);
         res.status(500).json({ error: 'Failed to load prices' });
-    }
-});
-
-// Chart Data Routes - UPDATED dengan data yang realistis
-app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
-    try {
-        const { symbol, timeframe } = req.params;
-        
-        // Generate sample candlestick data untuk demo
-        const generateCandlestickData = (symbol, timeframe) => {
-            const now = new Date();
-            const candleCount = 100;
-            const data = [];
-            
-            // Base price dari database atau default
-            let basePrice = 45000; // Bitcoin default
-            if (symbol === 'ETH') basePrice = 3200;
-            else if (symbol === 'LTC') basePrice = 180;
-            else if (symbol === 'XRP') basePrice = 0.65;
-            else if (symbol === 'DOGE') basePrice = 0.08;
-            else if (symbol === 'TRX') basePrice = 0.12;
-            
-            // Interval dalam menit berdasarkan timeframe
-            const intervals = {
-                '1m': 1, '5m': 5, '15m': 15, '30m': 30, 
-                '1h': 60, '4h': 240, '1d': 1440
-            };
-            const interval = intervals[timeframe] || 5;
-            
-            for (let i = candleCount; i >= 0; i--) {
-                const time = Math.floor((now.getTime() - (i * interval * 60 * 1000)) / 1000);
-                
-                // Generate OHLC dengan volatilitas realistis
-                const volatility = basePrice * 0.02; // 2% volatility
-                const open = basePrice + (Math.random() - 0.5) * volatility;
-                const close = open + (Math.random() - 0.5) * volatility;
-                const high = Math.max(open, close) + Math.random() * volatility * 0.5;
-                const low = Math.min(open, close) - Math.random() * volatility * 0.5;
-                
-                data.push({
-                    time: time,
-                    open: parseFloat(open.toFixed(symbol === 'BTC' ? 0 : 6)),
-                    high: parseFloat(high.toFixed(symbol === 'BTC' ? 0 : 6)),
-                    low: parseFloat(low.toFixed(symbol === 'BTC' ? 0 : 6)),
-                    close: parseFloat(close.toFixed(symbol === 'BTC' ? 0 : 6))
-                });
-                
-                basePrice = close; // Next candle starts from current close
-            }
-            
-            return data;
-        };
-        
-        const candlestickData = generateCandlestickData(symbol, timeframe);
-        
-        res.json({
-            symbol,
-            timeframe,
-            candlestick: candlestickData,
-            lastUpdate: new Date()
-        });
-        
-    } catch (error) {
-        console.error('Chart data error:', error);
-        res.status(500).json({ error: 'Failed to load chart data' });
     }
 });
 
@@ -1355,7 +1493,7 @@ app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, asyn
     }
 });
 
-// Socket.IO connection handling
+// Socket.IO connection handling dengan CHART SUBSCRIPTION
 io.on('connection', (socket) => {
     console.log('👤 User connected:', socket.id);
     
@@ -1366,6 +1504,26 @@ io.on('connection', (socket) => {
     
     socket.on('subscribe_prices', () => {
         console.log('📊 User subscribed to price updates');
+    });
+    
+    // BARU: Chart subscription
+    socket.on('subscribe_charts', (data) => {
+        const { symbol, timeframe } = data;
+        console.log(`📊 User subscribed to chart: ${symbol}/${timeframe}`);
+        
+        // Join specific chart room
+        socket.join(`chart_${symbol}_${timeframe}`);
+        
+        // Send current chart data if available
+        const key = `${symbol}-${timeframe}`;
+        const chartData = chartDataStore.get(key);
+        if (chartData && chartData.length > 0) {
+            socket.emit('chartUpdate', {
+                symbol,
+                timeframe,
+                candle: chartData[chartData.length - 1]
+            });
+        }
     });
     
     socket.on('disconnect', () => {
@@ -1398,7 +1556,7 @@ server.listen(PORT, '0.0.0.0', async () => {
 💰 Profit Settings: Enabled
 🔐 Password Management: Enabled
 🏦 User Bank Data Management: Enabled
-📊 Chart Data API: Enabled
+📊 Real-time Chart Data: Enabled
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
@@ -1462,6 +1620,21 @@ server.listen(PORT, '0.0.0.0', async () => {
         // Initialize prices
         await initializePrices();
         console.log('✅ Prices initialized');
+        
+        // BARU: Initialize chart data untuk semua symbol dan timeframe
+        const symbols = await Price.find();
+        const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+        
+        for (const symbol of symbols) {
+            for (const timeframe of timeframes) {
+                const key = `${symbol.symbol}-${timeframe}`;
+                if (!chartDataStore.has(key)) {
+                    const historicalData = await generateHistoricalData(symbol.symbol, timeframe, 100);
+                    chartDataStore.set(key, historicalData);
+                    console.log(`📊 Initialized chart data for ${symbol.symbol}/${timeframe}: ${historicalData.length} candles`);
+                }
+            }
+        }
         
         // Start background processes
         simulatePriceUpdates();
