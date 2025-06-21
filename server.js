@@ -428,7 +428,7 @@ app.get('/api/health', (req, res) => {
     res.json(health);
 });
 
-// Auth Routes
+// PERBAIKAN: Auth Routes - Fix untuk registrasi dengan email
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
@@ -446,18 +446,31 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             return res.status(400).json({ error: 'Password must be at least 6 characters' });
         }
         
-        // Set email jika hanya ada phone
-        let userEmail = email;
-        if (!email && phone) {
-            userEmail = `${phone}@phone.temp`;
+        // PERBAIKAN: Set email logic yang lebih baik
+        let userEmail;
+        if (email && email.trim()) {
+            // Jika email diberikan, gunakan email
+            userEmail = email.trim().toLowerCase();
+        } else if (phone && phone.trim()) {
+            // Jika hanya phone, buat email dummy
+            userEmail = `${phone.trim()}@phone.temp`;
+        } else {
+            return res.status(400).json({ error: 'Valid email or phone is required' });
         }
         
-        // Check if user exists
+        // PERBAIKAN: Check existing user dengan kondisi yang lebih safe
+        const existingQuery = [];
+        
+        // Selalu check email
+        existingQuery.push({ email: userEmail });
+        
+        // Hanya check phone jika phone ada dan bukan kosong
+        if (phone && phone.trim()) {
+            existingQuery.push({ phone: phone.trim() });
+        }
+        
         const existingUser = await User.findOne({ 
-            $or: [
-                { email: userEmail },
-                { phone: phone }
-            ]
+            $or: existingQuery
         });
         
         if (existingUser) {
@@ -467,19 +480,24 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 12);
         
-        // Create user dengan default profit settings
-        const user = new User({
-            name,
+        // PERBAIKAN: Create user dengan data yang sudah divalidasi
+        const userData = {
+            name: name.trim(),
             email: userEmail,
-            phone,
             password: hashedPassword,
             referralCode: generateReferralCode(),
             balance: 0,
             adminSettings: {
                 profitPercentage: 80 // Default 80%
             }
-        });
+        };
         
+        // Tambahkan phone hanya jika ada
+        if (phone && phone.trim()) {
+            userData.phone = phone.trim();
+        }
+        
+        const user = new User(userData);
         await user.save();
         
         // Log activity
@@ -504,10 +522,24 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         
     } catch (error) {
         console.error('Registration error:', error);
+        
+        // PERBAIKAN: Better error handling
+        if (error.code === 11000) {
+            // Duplicate key error
+            if (error.keyPattern && error.keyPattern.email) {
+                return res.status(400).json({ error: 'Email already registered' });
+            }
+            if (error.keyPattern && error.keyPattern.phone) {
+                return res.status(400).json({ error: 'Phone number already registered' });
+            }
+            return res.status(400).json({ error: 'User already exists' });
+        }
+        
         res.status(500).json({ error: 'Registration failed' });
     }
 });
 
+// PERBAIKAN: Login route yang juga diperbaiki untuk konsistensi
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { email, password } = req.body; // email bisa berisi email atau phone
@@ -516,12 +548,16 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             return res.status(400).json({ error: 'Email/Phone and password are required' });
         }
         
-        // Check if input is email or phone
+        // PERBAIKAN: Check if input is email or phone dengan validasi yang lebih baik
         let user;
-        if (email.includes('@')) {
-            user = await User.findOne({ email });
+        const cleanEmail = email.trim().toLowerCase();
+        
+        if (cleanEmail.includes('@')) {
+            // Input berupa email
+            user = await User.findOne({ email: cleanEmail });
         } else {
-            user = await User.findOne({ phone: email });
+            // Input berupa phone number
+            user = await User.findOne({ phone: cleanEmail });
         }
         
         if (!user) {
@@ -540,7 +576,7 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         user.lastLoginAt = new Date();
         await user.save();
         
-        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email}`);
+        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${cleanEmail}`);
         
         const token = jwt.sign(
             { userId: user._id },
