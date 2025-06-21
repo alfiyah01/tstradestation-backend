@@ -158,19 +158,6 @@ const priceSchema = new mongoose.Schema({
     lastUpdate: { type: Date, default: Date.now }
 });
 
-// BARU: Schema untuk Chart Data
-const chartDataSchema = new mongoose.Schema({
-    symbol: { type: String, required: true },
-    timeframe: { type: String, required: true }, // 1m, 5m, 15m, 30m, 1h, 4h, 1d
-    timestamp: { type: Date, required: true },
-    open: { type: Number, required: true },
-    high: { type: Number, required: true },
-    low: { type: Number, required: true },
-    close: { type: Number, required: true },
-    volume: { type: Number, required: true },
-    createdAt: { type: Date, default: Date.now }
-});
-
 const activitySchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     action: { type: String, required: true },
@@ -185,7 +172,6 @@ const Trade = mongoose.model('Trade', tradeSchema);
 const Deposit = mongoose.model('Deposit', depositSchema);
 const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
 const Price = mongoose.model('Price', priceSchema);
-const ChartData = mongoose.model('ChartData', chartDataSchema);
 const Activity = mongoose.model('Activity', activitySchema);
 
 // Helper functions
@@ -238,177 +224,6 @@ const requireAdmin = async (req, res, next) => {
     }
 };
 
-// =============================================
-// CHART DATA GENERATION FUNCTIONS
-// =============================================
-
-// Generate historical chart data
-async function generateHistoricalChartData(symbol, timeframe, periodsBack = 100) {
-    try {
-        const currentPrice = await Price.findOne({ symbol });
-        if (!currentPrice) return [];
-
-        const data = [];
-        const volumeData = [];
-        let basePrice = currentPrice.price;
-        let timeframeMins;
-
-        // Convert timeframe to minutes
-        switch (timeframe) {
-            case '1m': timeframeMins = 1; break;
-            case '5m': timeframeMins = 5; break;
-            case '15m': timeframeMins = 15; break;
-            case '30m': timeframeMins = 30; break;
-            case '1h': timeframeMins = 60; break;
-            case '4h': timeframeMins = 240; break;
-            case '1d': timeframeMins = 1440; break;
-            default: timeframeMins = 5;
-        }
-
-        // Generate historical data
-        for (let i = periodsBack; i >= 0; i--) {
-            const timestamp = new Date(Date.now() - (i * timeframeMins * 60 * 1000));
-            
-            // Generate realistic price movement
-            const volatility = Math.random() * 0.05; // 5% max volatility
-            const direction = Math.random() > 0.5 ? 1 : -1;
-            const priceChange = basePrice * volatility * direction;
-            
-            const open = basePrice;
-            const close = basePrice + priceChange;
-            const high = Math.max(open, close) + (Math.random() * basePrice * 0.02);
-            const low = Math.min(open, close) - (Math.random() * basePrice * 0.02);
-            const volume = Math.random() * 1000000 + 100000;
-
-            const candlestick = {
-                time: Math.floor(timestamp.getTime() / 1000),
-                open: parseFloat(open.toFixed(symbol === 'BTC' ? 0 : 6)),
-                high: parseFloat(high.toFixed(symbol === 'BTC' ? 0 : 6)),
-                low: parseFloat(low.toFixed(symbol === 'BTC' ? 0 : 6)),
-                close: parseFloat(close.toFixed(symbol === 'BTC' ? 0 : 6))
-            };
-
-            const volumeBar = {
-                time: Math.floor(timestamp.getTime() / 1000),
-                value: parseFloat(volume.toFixed(0)),
-                color: close > open ? '#00ff88' : '#ff4444'
-            };
-
-            data.push(candlestick);
-            volumeData.push(volumeBar);
-
-            basePrice = close;
-        }
-
-        return { candlestick: data, volume: volumeData };
-    } catch (error) {
-        console.error('Error generating chart data:', error);
-        return { candlestick: [], volume: [] };
-    }
-}
-
-// Update chart data in real-time
-async function updateChartData() {
-    try {
-        const prices = await Price.find();
-        const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-
-        for (const price of prices) {
-            for (const timeframe of timeframes) {
-                let timeframeMins;
-                
-                switch (timeframe) {
-                    case '1m': timeframeMins = 1; break;
-                    case '5m': timeframeMins = 5; break;
-                    case '15m': timeframeMins = 15; break;
-                    case '30m': timeframeMins = 30; break;
-                    case '1h': timeframeMins = 60; break;
-                    case '4h': timeframeMins = 240; break;
-                    case '1d': timeframeMins = 1440; break;
-                    default: timeframeMins = 5;
-                }
-
-                const now = new Date();
-                const roundedTime = new Date(Math.floor(now.getTime() / (timeframeMins * 60 * 1000)) * (timeframeMins * 60 * 1000));
-
-                // Check if we need to create a new candle
-                const existingCandle = await ChartData.findOne({
-                    symbol: price.symbol,
-                    timeframe: timeframe,
-                    timestamp: roundedTime
-                });
-
-                if (!existingCandle) {
-                    // Get the last candle for this symbol/timeframe
-                    const lastCandle = await ChartData.findOne({
-                        symbol: price.symbol,
-                        timeframe: timeframe
-                    }).sort({ timestamp: -1 });
-
-                    const open = lastCandle ? lastCandle.close : price.price;
-                    const close = price.price;
-                    const high = Math.max(open, close) + (Math.random() * price.price * 0.01);
-                    const low = Math.min(open, close) - (Math.random() * price.price * 0.01);
-                    const volume = Math.random() * 500000 + 100000;
-
-                    const newCandle = new ChartData({
-                        symbol: price.symbol,
-                        timeframe: timeframe,
-                        timestamp: roundedTime,
-                        open: parseFloat(open.toFixed(price.symbol === 'BTC' ? 0 : 6)),
-                        high: parseFloat(high.toFixed(price.symbol === 'BTC' ? 0 : 6)),
-                        low: parseFloat(low.toFixed(price.symbol === 'BTC' ? 0 : 6)),
-                        close: parseFloat(close.toFixed(price.symbol === 'BTC' ? 0 : 6)),
-                        volume: parseFloat(volume.toFixed(0))
-                    });
-
-                    await newCandle.save();
-
-                    // Broadcast new candle to clients
-                    io.emit('chartUpdate', {
-                        symbol: price.symbol,
-                        timeframe: timeframe,
-                        candle: {
-                            time: Math.floor(roundedTime.getTime() / 1000),
-                            open: newCandle.open,
-                            high: newCandle.high,
-                            low: newCandle.low,
-                            close: newCandle.close
-                        },
-                        volume: {
-                            time: Math.floor(roundedTime.getTime() / 1000),
-                            value: newCandle.volume,
-                            color: newCandle.close > newCandle.open ? '#00ff88' : '#ff4444'
-                        }
-                    });
-                } else {
-                    // Update existing candle
-                    existingCandle.close = price.price;
-                    existingCandle.high = Math.max(existingCandle.high, price.price);
-                    existingCandle.low = Math.min(existingCandle.low, price.price);
-                    
-                    await existingCandle.save();
-
-                    // Broadcast updated candle
-                    io.emit('chartUpdate', {
-                        symbol: price.symbol,
-                        timeframe: timeframe,
-                        candle: {
-                            time: Math.floor(roundedTime.getTime() / 1000),
-                            open: existingCandle.open,
-                            high: existingCandle.high,
-                            low: existingCandle.low,
-                            close: existingCandle.close
-                        }
-                    });
-                }
-            }
-        }
-    } catch (error) {
-        console.error('Error updating chart data:', error);
-    }
-}
-
 // Initialize default prices
 async function initializePrices() {
     const defaultPrices = [
@@ -428,30 +243,6 @@ async function initializePrices() {
             priceData,
             { upsert: true, new: true }
         );
-    }
-
-    console.log('✅ Prices initialized');
-}
-
-// Initialize chart data
-async function initializeChartData() {
-    try {
-        const symbols = ['BTC', 'ETH', 'LTC', 'XRP', 'DOGE', 'TRX', 'ETC', 'NEO'];
-        const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-
-        for (const symbol of symbols) {
-            for (const timeframe of timeframes) {
-                const existingData = await ChartData.findOne({ symbol, timeframe });
-                if (!existingData) {
-                    console.log(`📊 Generating chart data for ${symbol} ${timeframe}...`);
-                    // Generate initial historical data will be done via API calls
-                }
-            }
-        }
-        
-        console.log('✅ Chart data initialization completed');
-    } catch (error) {
-        console.error('Error initializing chart data:', error);
     }
 }
 
@@ -480,9 +271,6 @@ function simulatePriceUpdates() {
                     change: price.change
                 });
             }
-
-            // Update chart data
-            await updateChartData();
         } catch (error) {
             console.error('Error updating prices:', error);
         }
@@ -609,7 +397,7 @@ const checkDatabaseConnection = (req, res, next) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '2.3.0',
+        version: '2.2.0',
         status: 'Running',
         features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management', 'Chart Data API'],
         endpoints: {
@@ -639,113 +427,6 @@ app.get('/api/health', (req, res) => {
     };
     
     res.json(health);
-});
-
-// =============================================
-// CHART API ENDPOINTS
-// =============================================
-
-// Get chart data untuk symbol dan timeframe tertentu
-app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
-    try {
-        const { symbol, timeframe } = req.params;
-        const { limit = 100 } = req.query;
-
-        // Validate symbol
-        const validSymbols = ['BTC', 'ETH', 'LTC', 'XRP', 'DOGE', 'TRX', 'ETC', 'NEO'];
-        if (!validSymbols.includes(symbol.toUpperCase())) {
-            return res.status(400).json({ error: 'Invalid symbol' });
-        }
-
-        // Validate timeframe
-        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-        if (!validTimeframes.includes(timeframe)) {
-            return res.status(400).json({ error: 'Invalid timeframe' });
-        }
-
-        // Check if we have stored chart data
-        const storedData = await ChartData.find({
-            symbol: symbol.toUpperCase(),
-            timeframe: timeframe
-        }).sort({ timestamp: -1 }).limit(parseInt(limit));
-
-        if (storedData.length === 0) {
-            // Generate historical data if none exists
-            console.log(`📊 Generating chart data for ${symbol} ${timeframe}...`);
-            const generatedData = await generateHistoricalChartData(symbol.toUpperCase(), timeframe, parseInt(limit));
-            return res.json(generatedData);
-        }
-
-        // Convert stored data to chart format
-        const candlestickData = storedData.reverse().map(candle => ({
-            time: Math.floor(new Date(candle.timestamp).getTime() / 1000),
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close
-        }));
-
-        const volumeData = storedData.map(candle => ({
-            time: Math.floor(new Date(candle.timestamp).getTime() / 1000),
-            value: candle.volume,
-            color: candle.close > candle.open ? '#00ff88' : '#ff4444'
-        }));
-
-        res.json({
-            candlestick: candlestickData,
-            volume: volumeData
-        });
-
-    } catch (error) {
-        console.error('Chart data error:', error);
-        res.status(500).json({ error: 'Failed to load chart data' });
-    }
-});
-
-// Get current trading data (untuk Trading View style chart)
-app.get('/api/trading-chart/:symbol', async (req, res) => {
-    try {
-        const { symbol } = req.params;
-        const { timeframe = '5m' } = req.query;
-
-        // Generate data khusus untuk TradingView style
-        const chartData = await generateHistoricalChartData(symbol.toUpperCase(), timeframe, 100);
-        
-        res.json({
-            symbol: symbol.toUpperCase(),
-            timeframe: timeframe,
-            data: chartData
-        });
-
-    } catch (error) {
-        console.error('Trading chart error:', error);
-        res.status(500).json({ error: 'Failed to load trading chart data' });
-    }
-});
-
-// Get market summary dengan chart preview
-app.get('/api/market-summary', async (req, res) => {
-    try {
-        const prices = await Price.find().sort({ symbol: 1 });
-        const marketData = [];
-
-        for (const price of prices) {
-            // Get last 24 hours chart data (simplified)
-            const chartPreview = await generateHistoricalChartData(price.symbol, '1h', 24);
-            
-            marketData.push({
-                symbol: price.symbol,
-                price: price.price,
-                change: price.change,
-                chartPreview: chartPreview.candlestick.slice(-24) // Last 24 hours
-            });
-        }
-
-        res.json(marketData);
-    } catch (error) {
-        console.error('Market summary error:', error);
-        res.status(500).json({ error: 'Failed to load market summary' });
-    }
 });
 
 // Auth Routes
@@ -959,6 +640,71 @@ app.get('/api/prices', async (req, res) => {
     } catch (error) {
         console.error('Prices error:', error);
         res.status(500).json({ error: 'Failed to load prices' });
+    }
+});
+
+// Chart Data Routes - UPDATED dengan data yang realistis
+app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
+    try {
+        const { symbol, timeframe } = req.params;
+        
+        // Generate sample candlestick data untuk demo
+        const generateCandlestickData = (symbol, timeframe) => {
+            const now = new Date();
+            const candleCount = 100;
+            const data = [];
+            
+            // Base price dari database atau default
+            let basePrice = 45000; // Bitcoin default
+            if (symbol === 'ETH') basePrice = 3200;
+            else if (symbol === 'LTC') basePrice = 180;
+            else if (symbol === 'XRP') basePrice = 0.65;
+            else if (symbol === 'DOGE') basePrice = 0.08;
+            else if (symbol === 'TRX') basePrice = 0.12;
+            
+            // Interval dalam menit berdasarkan timeframe
+            const intervals = {
+                '1m': 1, '5m': 5, '15m': 15, '30m': 30, 
+                '1h': 60, '4h': 240, '1d': 1440
+            };
+            const interval = intervals[timeframe] || 5;
+            
+            for (let i = candleCount; i >= 0; i--) {
+                const time = Math.floor((now.getTime() - (i * interval * 60 * 1000)) / 1000);
+                
+                // Generate OHLC dengan volatilitas realistis
+                const volatility = basePrice * 0.02; // 2% volatility
+                const open = basePrice + (Math.random() - 0.5) * volatility;
+                const close = open + (Math.random() - 0.5) * volatility;
+                const high = Math.max(open, close) + Math.random() * volatility * 0.5;
+                const low = Math.min(open, close) - Math.random() * volatility * 0.5;
+                
+                data.push({
+                    time: time,
+                    open: parseFloat(open.toFixed(symbol === 'BTC' ? 0 : 6)),
+                    high: parseFloat(high.toFixed(symbol === 'BTC' ? 0 : 6)),
+                    low: parseFloat(low.toFixed(symbol === 'BTC' ? 0 : 6)),
+                    close: parseFloat(close.toFixed(symbol === 'BTC' ? 0 : 6))
+                });
+                
+                basePrice = close; // Next candle starts from current close
+            }
+            
+            return data;
+        };
+        
+        const candlestickData = generateCandlestickData(symbol, timeframe);
+        
+        res.json({
+            symbol,
+            timeframe,
+            candlestick: candlestickData,
+            lastUpdate: new Date()
+        });
+        
+    } catch (error) {
+        console.error('Chart data error:', error);
+        res.status(500).json({ error: 'Failed to load chart data' });
     }
 });
 
@@ -1622,11 +1368,6 @@ io.on('connection', (socket) => {
         console.log('📊 User subscribed to price updates');
     });
     
-    socket.on('subscribe_charts', (data) => {
-        console.log('📈 User subscribed to chart updates:', data);
-        socket.join(`chart_${data.symbol}_${data.timeframe}`);
-    });
-    
     socket.on('disconnect', () => {
         console.log('👤 User disconnected:', socket.id);
     });
@@ -1718,10 +1459,9 @@ server.listen(PORT, '0.0.0.0', async () => {
             console.log('✅ Sample bank accounts created');
         }
         
-        // Initialize prices and chart data
+        // Initialize prices
         await initializePrices();
-        await initializeChartData();
-        console.log('✅ Prices and chart data initialized');
+        console.log('✅ Prices initialized');
         
         // Start background processes
         simulatePriceUpdates();
