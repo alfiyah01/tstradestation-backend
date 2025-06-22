@@ -38,19 +38,23 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting
+// Rate limiting - RELAXED for better user experience
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
+    max: 200, // INCREASED: limit each IP to 200 requests per windowMs (was 100)
+    message: { error: 'Too many requests from this IP, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 app.use('/api/', limiter);
 
-// Strict rate limiting for auth endpoints
+// Strict rate limiting for auth endpoints - RELAXED for development
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // limit each IP to 5 requests per windowMs
-    message: 'Too many authentication attempts, please try again later.'
+    max: 20, // INCREASED: limit each IP to 20 requests per windowMs (was 5)
+    message: { error: 'Too many authentication attempts, please try again later.' }, // Return JSON
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
 
 // Database Models - UPDATED dengan Profit Settings
@@ -624,9 +628,9 @@ const checkDatabaseConnection = (req, res, next) => {
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '2.4.0',
+        version: '2.5.0',
         status: 'Running',
-        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management', 'Enhanced Real-time Chart Data'],
+        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management', 'Enhanced Real-time Chart Data', 'Improved Rate Limiting'],
         endpoints: {
             health: '/api/health',
             register: 'POST /api/register',
@@ -651,7 +655,8 @@ app.get('/api/health', (req, res) => {
         environment: process.env.NODE_ENV || 'development',
         database: global.dbConnected !== false ? 'Connected' : 'Disconnected',
         port: process.env.PORT || 3000,
-        chartDataStatus: `${chartDataStore.size} chart datasets loaded`
+        chartDataStatus: `${chartDataStore.size} chart datasets loaded`,
+        rateLimiting: 'Enhanced - 200 requests/15min general, 20 auth/15min'
     };
     
     res.json(health);
@@ -838,7 +843,12 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         
     } catch (error) {
         console.error('Registration error:', error);
-        res.status(500).json({ error: 'Registration failed' });
+        // ALWAYS return JSON, even for errors
+        res.status(500).json({ 
+            error: 'Registration failed', 
+            message: 'Internal server error',
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -893,7 +903,12 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         
     } catch (error) {
         console.error('Login error:', error);
-        res.status(500).json({ error: 'Login failed' });
+        // ALWAYS return JSON, even for errors
+        res.status(500).json({ 
+            error: 'Login failed', 
+            message: 'Internal server error',
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -1672,12 +1687,21 @@ io.on('connection', (socket) => {
 // Global error handler
 app.use((error, req, res, next) => {
     console.error('❌ Global error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+        error: 'Internal server error',
+        message: error.message,
+        timestamp: new Date().toISOString()
+    });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-    res.status(404).json({ error: 'Route not found' });
+    res.status(404).json({ 
+        error: 'Route not found',
+        path: req.originalUrl,
+        method: req.method,
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Start server
@@ -1695,6 +1719,7 @@ server.listen(PORT, '0.0.0.0', async () => {
 🔐 Password Management: Enabled
 🏦 User Bank Data Management: Enabled
 📊 Enhanced Real-time Chart Data: Enabled
+⚡ Rate Limiting: Enhanced (200 general / 20 auth per 15min)
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
