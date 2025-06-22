@@ -41,15 +41,15 @@ app.use(express.urlencoded({ extended: true }));
 // Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
+    max: 100,
     message: { error: 'Too many requests from this IP, please try again later.' }
 });
 app.use('/api/', limiter);
 
-// Strict rate limiting for auth endpoints
+// Auth rate limiting
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // limit each IP to 5 requests per windowMs
+    max: 5,
     message: { error: 'Too many authentication attempts, please try again later.' }
 });
 
@@ -60,9 +60,9 @@ const authLimiter = rateLimit({
 // User Schema - COMPLETE
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
+    email: { type: String },
     phone: { type: String },
+    password: { type: String, required: true },
     balance: { type: Number, default: 0 },
     accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
     isActive: { type: Boolean, default: true },
@@ -90,6 +90,10 @@ const userSchema = new mongoose.Schema({
     lastLoginAt: { type: Date },
     createdAt: { type: Date, default: Date.now }
 });
+
+// Ensure unique email or phone
+userSchema.index({ email: 1 }, { unique: true, sparse: true });
+userSchema.index({ phone: 1 }, { unique: true, sparse: true });
 
 // Bank Account Schema untuk Admin Panel
 const bankAccountSchema = new mongoose.Schema({
@@ -617,24 +621,25 @@ const requireAdmin = async (req, res, next) => {
 };
 
 // ========================================
-// ROUTES
+// PUBLIC ROUTES
 // ========================================
 
 // Root route
 app.get('/', (req, res) => {
     res.json({
         message: 'TradeStation Backend API',
-        version: '2.5.0',
+        version: '3.0.0',
         status: 'Running',
         features: [
-            'Email Authentication',
+            'Email/Phone Authentication',
             'Mobile-First Trading',
             'Real-time Chart Data',
             'Bank Account Management', 
             'File Upload', 
             'Admin Trading Control', 
             'Profit Settings',
-            'Enhanced Mobile UI'
+            'Enhanced Mobile UI',
+            'Complete Admin Panel'
         ],
         endpoints: {
             health: '/api/health',
@@ -749,20 +754,21 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
     }
 });
 
-// Auth Routes
+// ========================================
+// AUTH ROUTES
+// ========================================
+
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
         // Validation
-        if (!name || !email || !password) {
-            return res.status(400).json({ error: 'Name, email, and password are required' });
+        if (!name || !password) {
+            return res.status(400).json({ error: 'Name and password are required' });
         }
-        
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            return res.status(400).json({ error: 'Invalid email format' });
+
+        if (!email && !phone) {
+            return res.status(400).json({ error: 'Email or phone number is required' });
         }
         
         if (password.length < 6) {
@@ -770,31 +776,46 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         }
         
         // Check if user exists
-        const existingUser = await User.findOne({ email });
+        let existingUser = null;
+        if (email) {
+            // Validate email format
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+            existingUser = await User.findOne({ email });
+        }
+        
+        if (phone && !existingUser) {
+            existingUser = await User.findOne({ phone });
+        }
+        
         if (existingUser) {
-            return res.status(400).json({ error: 'Email already registered' });
+            return res.status(400).json({ error: 'Email or phone already registered' });
         }
         
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 12);
         
         // Create user dengan default profit settings
-        const user = new User({
+        const userData = {
             name,
-            email,
-            phone,
             password: hashedPassword,
             referralCode: generateReferralCode(),
             balance: 0,
             adminSettings: {
                 profitPercentage: 80 // Default 80%
             }
-        });
+        };
+
+        if (email) userData.email = email;
+        if (phone) userData.phone = phone;
         
+        const user = new User(userData);
         await user.save();
         
         // Log activity
-        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email}`);
+        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email || phone}`);
         
         // Generate token
         const token = jwt.sign(
@@ -821,20 +842,28 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, phone, password } = req.body;
         
-        if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password are required' });
+        if (!password) {
+            return res.status(400).json({ error: 'Password is required' });
+        }
+
+        if (!email && !phone) {
+            return res.status(400).json({ error: 'Email or phone number is required' });
         }
         
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            return res.status(400).json({ error: 'Invalid email format' });
+        // Find user by email or phone
+        let user = null;
+        if (email) {
+            // Validate email format
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+            user = await User.findOne({ email });
+        } else if (phone) {
+            user = await User.findOne({ phone });
         }
-        
-        // Find user by email
-        const user = await User.findOne({ email });
         
         if (!user) {
             return res.status(400).json({ error: 'Invalid credentials' });
@@ -852,7 +881,7 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         user.lastLoginAt = new Date();
         await user.save();
         
-        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email}`);
+        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email || phone}`);
         
         const token = jwt.sign(
             { userId: user._id },
@@ -875,7 +904,10 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
     }
 });
 
-// User Routes
+// ========================================
+// USER ROUTES
+// ========================================
+
 app.get('/api/profile', authenticateToken, async (req, res) => {
     try {
         const user = await User.findById(req.userId).select('-password');
@@ -954,7 +986,10 @@ app.get('/api/prices', async (req, res) => {
     }
 });
 
-// Trading Routes
+// ========================================
+// TRADING ROUTES
+// ========================================
+
 app.post('/api/trade', authenticateToken, async (req, res) => {
     try {
         const { symbol, direction, amount, duration } = req.body;
@@ -1039,13 +1074,16 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
     }
 });
 
-// Deposit Routes
+// ========================================
+// DEPOSIT ROUTES
+// ========================================
+
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
         const { amount, receipt, fileName, fileType, bankFrom } = req.body;
         
-        if (!amount || amount < 50000) {
-            return res.status(400).json({ error: 'Minimum deposit is Rp 50,000' });
+        if (!amount || amount < 500000) {
+            return res.status(400).json({ error: 'Minimum deposit is Rp 500,000' });
         }
         
         if (!receipt) {
@@ -1095,7 +1133,10 @@ app.get('/api/deposits', authenticateToken, async (req, res) => {
     }
 });
 
-// Withdrawal Routes
+// ========================================
+// WITHDRAWAL ROUTES
+// ========================================
+
 app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
         const { amount } = req.body;
@@ -1158,7 +1199,11 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     }
 });
 
-// Admin Routes (Add more as needed)
+// ========================================
+// ADMIN ROUTES
+// ========================================
+
+// Admin Dashboard
 app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
     try {
         // Get statistics
@@ -1166,26 +1211,458 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
         const activeUsers = await User.countDocuments({ isActive: true });
         const totalTrades = await Trade.countDocuments();
         const activeTrades = await Trade.countDocuments({ status: 'active' });
-        const totalDeposits = await Deposit.countDocuments({ status: 'approved' });
+        const totalDeposits = await Deposit.countDocuments();
         const pendingDeposits = await Deposit.countDocuments({ status: 'pending' });
         const totalWithdrawals = await Withdrawal.countDocuments();
         const pendingWithdrawals = await Withdrawal.countDocuments({ status: 'pending' });
+        
+        // Get volume stats
+        const completedTrades = await Trade.find({ status: 'completed' });
+        const totalVolume = completedTrades.reduce((sum, trade) => sum + trade.amount, 0);
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayTrades = await Trade.find({ 
+            status: 'completed',
+            createdAt: { $gte: today }
+        });
+        const todayVolume = todayTrades.reduce((sum, trade) => sum + trade.amount, 0);
+        
+        // Get bank accounts stats
+        const totalBankAccounts = await BankAccount.countDocuments();
+        const activeBankAccounts = await BankAccount.countDocuments({ isActive: true });
+        
+        // Get recent activities
+        const recentActivities = await Activity.find()
+            .populate('userId', 'name email')
+            .sort({ createdAt: -1 })
+            .limit(10);
         
         const stats = {
             users: { total: totalUsers, active: activeUsers },
             trades: { total: totalTrades, active: activeTrades },
             deposits: { total: totalDeposits, pending: pendingDeposits },
-            withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals }
+            withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
+            volume: { total: totalVolume, today: todayVolume },
+            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts }
         };
         
-        res.json({ stats });
+        res.json({ 
+            stats,
+            recentActivities
+        });
     } catch (error) {
         console.error('Admin dashboard error:', error);
         res.status(500).json({ error: 'Failed to load dashboard' });
     }
 });
 
-// Socket.IO connection handling
+// User Management
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const users = await User.find()
+            .select('-password')
+            .sort({ createdAt: -1 });
+        
+        res.json({ users });
+    } catch (error) {
+        console.error('Admin users error:', error);
+        res.status(500).json({ error: 'Failed to load users' });
+    }
+});
+
+app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updateData = req.body;
+        
+        // Don't allow updating password through this endpoint
+        delete updateData.password;
+        
+        const user = await User.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_USER_UPDATE', `Updated user: ${user.name}`);
+        
+        res.json({ message: 'User updated successfully', user });
+    } catch (error) {
+        console.error('Admin user update error:', error);
+        res.status(500).json({ error: 'Failed to update user' });
+    }
+});
+
+app.put('/api/admin/user/:id/password', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { newPassword } = req.body;
+        
+        if (!newPassword || newPassword.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        }
+        
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        
+        const user = await User.findByIdAndUpdate(
+            id,
+            { password: hashedPassword },
+            { new: true }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_PASSWORD_CHANGE', `Changed password for user: ${user.name}`);
+        
+        res.json({ message: 'Password changed successfully' });
+    } catch (error) {
+        console.error('Admin password change error:', error);
+        res.status(500).json({ error: 'Failed to change password' });
+    }
+});
+
+// User Bank Data Management
+app.get('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const user = await User.findById(id).select('bankData name email');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({ bankData: user.bankData });
+    } catch (error) {
+        console.error('Admin user bank error:', error);
+        res.status(500).json({ error: 'Failed to load user bank data' });
+    }
+});
+
+app.put('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { bankName, accountNumber, accountHolder } = req.body;
+        
+        const user = await User.findByIdAndUpdate(
+            id,
+            { 
+                bankData: { bankName, accountNumber, accountHolder }
+            },
+            { new: true }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_UPDATE', `Updated bank data for user: ${user.name}`);
+        
+        res.json({ message: 'Bank data updated successfully' });
+    } catch (error) {
+        console.error('Admin user bank update error:', error);
+        res.status(500).json({ error: 'Failed to update bank data' });
+    }
+});
+
+app.delete('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const user = await User.findByIdAndUpdate(
+            id,
+            { $unset: { bankData: 1 } },
+            { new: true }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_DELETE', `Deleted bank data for user: ${user.name}`);
+        
+        res.json({ message: 'Bank data deleted successfully' });
+    } catch (error) {
+        console.error('Admin user bank delete error:', error);
+        res.status(500).json({ error: 'Failed to delete bank data' });
+    }
+});
+
+// Trade Management
+app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status } = req.query;
+        
+        let query = {};
+        if (status) {
+            query.status = status;
+        }
+        
+        const trades = await Trade.find(query)
+            .populate('userId', 'name email')
+            .sort({ createdAt: -1 })
+            .limit(100);
+        
+        res.json({ trades });
+    } catch (error) {
+        console.error('Admin trades error:', error);
+        res.status(500).json({ error: 'Failed to load trades' });
+    }
+});
+
+app.put('/api/admin/trade/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { forceResult } = req.body;
+        
+        const trade = await Trade.findById(id);
+        if (!trade) {
+            return res.status(404).json({ error: 'Trade not found' });
+        }
+        
+        if (trade.status !== 'active') {
+            return res.status(400).json({ error: 'Can only control active trades' });
+        }
+        
+        trade.forceResult = forceResult;
+        await trade.save();
+        
+        await logActivity(req.userId, 'ADMIN_TRADE_CONTROL', `Controlled trade: ${trade._id} - ${forceResult}`);
+        
+        res.json({ message: 'Trade control updated successfully' });
+    } catch (error) {
+        console.error('Admin trade control error:', error);
+        res.status(500).json({ error: 'Failed to control trade' });
+    }
+});
+
+// Deposit Management
+app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status } = req.query;
+        
+        let query = {};
+        if (status) {
+            query.status = status;
+        }
+        
+        const deposits = await Deposit.find(query)
+            .populate('userId', 'name email')
+            .sort({ createdAt: -1 })
+            .limit(100);
+        
+        res.json({ deposits });
+    } catch (error) {
+        console.error('Admin deposits error:', error);
+        res.status(500).json({ error: 'Failed to load deposits' });
+    }
+});
+
+app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, adminNotes } = req.body;
+        
+        const deposit = await Deposit.findById(id).populate('userId');
+        if (!deposit) {
+            return res.status(404).json({ error: 'Deposit not found' });
+        }
+        
+        deposit.status = status;
+        deposit.adminNotes = adminNotes;
+        deposit.processedAt = new Date();
+        
+        // If approved, add to user balance
+        if (status === 'approved') {
+            deposit.userId.balance += deposit.amount;
+            await deposit.userId.save();
+            
+            // Notify user via socket
+            io.to(deposit.userId._id.toString()).emit('depositApproved', {
+                amount: deposit.amount,
+                newBalance: deposit.userId.balance
+            });
+        }
+        
+        await deposit.save();
+        
+        await logActivity(req.userId, 'ADMIN_DEPOSIT_PROCESS', `${status} deposit: ${deposit.amount} for ${deposit.userId.name}`);
+        
+        res.json({ message: `Deposit ${status} successfully` });
+    } catch (error) {
+        console.error('Admin deposit process error:', error);
+        res.status(500).json({ error: 'Failed to process deposit' });
+    }
+});
+
+// Withdrawal Management
+app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status } = req.query;
+        
+        let query = {};
+        if (status) {
+            query.status = status;
+        }
+        
+        const withdrawals = await Withdrawal.find(query)
+            .populate('userId', 'name email')
+            .sort({ createdAt: -1 })
+            .limit(100);
+        
+        res.json({ withdrawals });
+    } catch (error) {
+        console.error('Admin withdrawals error:', error);
+        res.status(500).json({ error: 'Failed to load withdrawals' });
+    }
+});
+
+app.put('/api/admin/withdrawal/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, adminNotes } = req.body;
+        
+        const withdrawal = await Withdrawal.findById(id).populate('userId');
+        if (!withdrawal) {
+            return res.status(404).json({ error: 'Withdrawal not found' });
+        }
+        
+        withdrawal.status = status;
+        withdrawal.adminNotes = adminNotes;
+        withdrawal.processedAt = new Date();
+        
+        // If rejected, return money to user balance
+        if (status === 'rejected') {
+            withdrawal.userId.balance += withdrawal.amount;
+            await withdrawal.userId.save();
+        }
+        
+        await withdrawal.save();
+        
+        await logActivity(req.userId, 'ADMIN_WITHDRAWAL_PROCESS', `${status} withdrawal: ${withdrawal.amount} for ${withdrawal.userId.name}`);
+        
+        res.json({ message: `Withdrawal ${status} successfully` });
+    } catch (error) {
+        console.error('Admin withdrawal process error:', error);
+        res.status(500).json({ error: 'Failed to process withdrawal' });
+    }
+});
+
+// Bank Account Management
+app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const accounts = await BankAccount.find().sort({ createdAt: -1 });
+        res.json({ accounts });
+    } catch (error) {
+        console.error('Admin bank accounts error:', error);
+        res.status(500).json({ error: 'Failed to load bank accounts' });
+    }
+});
+
+app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { bankName, accountNumber, accountHolder, note } = req.body;
+        
+        const account = new BankAccount({
+            bankName,
+            accountNumber,
+            accountHolder,
+            note
+        });
+        
+        await account.save();
+        
+        await logActivity(req.userId, 'ADMIN_BANK_CREATE', `Created bank account: ${bankName} - ${accountNumber}`);
+        
+        res.status(201).json({ 
+            message: 'Bank account created successfully',
+            account
+        });
+    } catch (error) {
+        console.error('Admin bank account create error:', error);
+        res.status(500).json({ error: 'Failed to create bank account' });
+    }
+});
+
+app.put('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updateData = req.body;
+        
+        const account = await BankAccount.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true }
+        );
+        
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_UPDATE', `Updated bank account: ${account.bankName}`);
+        
+        res.json({ 
+            message: 'Bank account updated successfully',
+            account
+        });
+    } catch (error) {
+        console.error('Admin bank account update error:', error);
+        res.status(500).json({ error: 'Failed to update bank account' });
+    }
+});
+
+app.patch('/api/admin/bank-accounts/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const account = await BankAccount.findById(id);
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        account.isActive = !account.isActive;
+        await account.save();
+        
+        await logActivity(req.userId, 'ADMIN_BANK_TOGGLE', `${account.isActive ? 'Activated' : 'Deactivated'} bank account: ${account.bankName}`);
+        
+        res.json({ 
+            message: `Bank account ${account.isActive ? 'activated' : 'deactivated'} successfully`,
+            account
+        });
+    } catch (error) {
+        console.error('Admin bank account toggle error:', error);
+        res.status(500).json({ error: 'Failed to toggle bank account' });
+    }
+});
+
+app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const account = await BankAccount.findByIdAndDelete(id);
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_DELETE', `Deleted bank account: ${account.bankName}`);
+        
+        res.json({ message: 'Bank account deleted successfully' });
+    } catch (error) {
+        console.error('Admin bank account delete error:', error);
+        res.status(500).json({ error: 'Failed to delete bank account' });
+    }
+});
+
+// ========================================
+// SOCKET.IO HANDLING
+// ========================================
+
 io.on('connection', (socket) => {
     console.log('👤 User connected:', socket.id);
     
@@ -1223,10 +1700,22 @@ io.on('connection', (socket) => {
         }
     });
     
+    socket.on('pause_updates', () => {
+        console.log('⏸️ User paused updates');
+    });
+    
+    socket.on('resume_updates', () => {
+        console.log('▶️ User resumed updates');
+    });
+    
     socket.on('disconnect', () => {
         console.log('👤 User disconnected:', socket.id);
     });
 });
+
+// ========================================
+// ERROR HANDLING
+// ========================================
 
 // Global error handler
 app.use((error, req, res, next) => {
@@ -1239,20 +1728,24 @@ app.use('*', (req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-// Start server
+// ========================================
+// SERVER START
+// ========================================
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', async () => {
     console.log(`
 🚀 TradeStation Backend Server Started!
 📍 Port: ${PORT}
 🌍 Environment: ${process.env.NODE_ENV || 'development'}
-📧 Email Authentication: Enabled
+📧 Email/Phone Authentication: Enabled
 📱 Mobile-First Design: Supported
 📊 Real-time Chart Data: Enhanced
 🛡️  Security: Enabled
 💳 Bank Management: Enabled
 🎯 Trading Control: Enabled
 💰 Profit Settings: Enabled
+⚙️  Admin Panel: Complete
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
