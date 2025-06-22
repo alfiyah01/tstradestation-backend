@@ -15,7 +15,7 @@ const server = http.createServer(app);
 // Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500"],
+        origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -29,7 +29,7 @@ app.use(helmet({
 }));
 
 app.use(cors({
-    origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500"],
+    origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization']
@@ -38,26 +38,26 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting - RELAXED for better user experience
+// Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200, // INCREASED: limit each IP to 200 requests per windowMs (was 100)
-    message: { error: 'Too many requests from this IP, please try again later.' },
-    standardHeaders: true,
-    legacyHeaders: false,
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: { error: 'Too many requests from this IP, please try again later.' }
 });
 app.use('/api/', limiter);
 
-// Strict rate limiting for auth endpoints - RELAXED for development
+// Strict rate limiting for auth endpoints
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 20, // INCREASED: limit each IP to 20 requests per windowMs (was 5)
-    message: { error: 'Too many authentication attempts, please try again later.' }, // Return JSON
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    max: 5, // limit each IP to 5 requests per windowMs
+    message: { error: 'Too many authentication attempts, please try again later.' }
 });
 
-// Database Models - UPDATED dengan Profit Settings
+// ========================================
+// DATABASE MODELS
+// ========================================
+
+// User Schema - COMPLETE
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -75,10 +75,10 @@ const userSchema = new mongoose.Schema({
         accountNumber: { type: String },
         accountHolder: { type: String }
     },
-    // Admin Settings untuk User Trading - UPDATED
+    // Admin Settings untuk User Trading
     adminSettings: {
         forceWin: { type: Boolean, default: false },
-        forceWinRate: { type: Number, default: 0 }, // 0-100%, digunakan jika forceWin true
+        forceWinRate: { type: Number, default: 0 }, // 0-100%
         profitCollapse: { type: String, enum: ['profit', 'collapse', 'normal'], default: 'normal' },
         profitPercentage: { type: Number, default: 80 } // Default 80% profit
     },
@@ -101,7 +101,7 @@ const bankAccountSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// UPDATED: Trade Schema - hilangkan profitPercentage karena akan diambil dari user settings
+// Trade Schema - COMPLETE
 const tradeSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     symbol: { type: String, required: true },
@@ -115,13 +115,13 @@ const tradeSchema = new mongoose.Schema({
     payout: { type: Number },
     priceChangePercent: { type: Number },
     forceResult: { type: String }, // admin override
-    adminForced: { type: Boolean, default: false }, // flag untuk admin control
-    profitPercentage: { type: Number }, // Diambil dari user settings saat trade dibuat
+    adminForced: { type: Boolean, default: false },
+    profitPercentage: { type: Number }, // Diambil dari user settings
     createdAt: { type: Date, default: Date.now },
     completedAt: { type: Date }
 });
 
-// Updated Deposit Schema dengan File Upload
+// Deposit Schema - COMPLETE dengan File Upload
 const depositSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
@@ -138,7 +138,7 @@ const depositSchema = new mongoose.Schema({
     processedAt: { type: Date }
 });
 
-// Updated Withdrawal Schema dengan Bank Account
+// Withdrawal Schema - COMPLETE
 const withdrawalSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
@@ -155,6 +155,7 @@ const withdrawalSchema = new mongoose.Schema({
     processedAt: { type: Date }
 });
 
+// Price Schema - COMPLETE
 const priceSchema = new mongoose.Schema({
     symbol: { type: String, required: true, unique: true },
     price: { type: Number, required: true },
@@ -162,6 +163,7 @@ const priceSchema = new mongoose.Schema({
     lastUpdate: { type: Date, default: Date.now }
 });
 
+// Activity Schema - COMPLETE
 const activitySchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     action: { type: String, required: true },
@@ -169,7 +171,7 @@ const activitySchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// BARU: Chart Data Schema untuk menyimpan historical candlestick data
+// Chart Data Schema - COMPLETE
 const chartDataSchema = new mongoose.Schema({
     symbol: { type: String, required: true },
     timeframe: { type: String, required: true }, // 1m, 5m, 15m, 30m, 1h, 4h, 1d
@@ -195,11 +197,13 @@ const Price = mongoose.model('Price', priceSchema);
 const Activity = mongoose.model('Activity', activitySchema);
 const ChartData = mongoose.model('ChartData', chartDataSchema);
 
-// PERBAIKAN: Enhanced Chart Data Management
-let chartDataStore = new Map(); // In-memory storage untuk real-time chart data
-let lastCandleTime = new Map(); // Track last candle time per symbol/timeframe
+// ========================================
+// HELPER FUNCTIONS
+// ========================================
 
-// Helper functions
+// Chart Data Management
+let chartDataStore = new Map(); // In-memory storage untuk real-time chart data
+
 function generateReferralCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
@@ -212,7 +216,6 @@ async function logActivity(userId, action, details = '') {
     }
 }
 
-// PERBAIKAN: Enhanced Chart helper functions dengan error handling
 function getTimeframeMinutes(timeframe) {
     const timeframes = {
         '1m': 1,
@@ -237,7 +240,7 @@ function roundTimeToTimeframe(timestamp, timeframe) {
     }
 }
 
-// PERBAIKAN: Enhanced candle generation dengan validasi data
+// Enhanced candle generation
 function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle = null) {
     try {
         if (!currentPrice || isNaN(currentPrice)) {
@@ -251,12 +254,11 @@ function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle
         // Jika ini candle baru
         if (!previousCandle || previousCandle.time < roundedTime) {
             const volatility = 0.02; // 2% volatility
-            const randomChange = (Math.random() - 0.5) * volatility;
             
             const open = previousCandle ? previousCandle.close : currentPrice;
             const close = currentPrice;
             
-            // Generate realistic high and low dengan validasi
+            // Generate realistic high and low
             const high = Math.max(open, close) * (1 + Math.random() * volatility);
             const low = Math.min(open, close) * (1 - Math.random() * volatility);
             
@@ -286,7 +288,7 @@ function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle
     }
 }
 
-// PERBAIKAN: Enhanced historical data generation
+// Enhanced historical data generation
 async function generateHistoricalData(symbol, timeframe, count = 100) {
     try {
         console.log(`📊 Generating historical data for ${symbol}/${timeframe} (${count} candles)`);
@@ -307,7 +309,7 @@ async function generateHistoricalData(symbol, timeframe, count = 100) {
         for (let i = count; i >= 0; i--) {
             const time = Math.floor((now - (i * timeframeMs)) / 1000);
             
-            // Add some realistic price movement dengan trend
+            // Add some realistic price movement
             const volatility = 0.015; // 1.5% volatility
             const trendFactor = (Math.random() - 0.48) * volatility; // Slight upward bias
             price = price * (1 + trendFactor);
@@ -318,7 +320,6 @@ async function generateHistoricalData(symbol, timeframe, count = 100) {
             const low = Math.min(open, close) * (1 - Math.random() * volatility * 0.5);
             const volume = Math.floor(Math.random() * 1000000) + 100000;
             
-            // Validasi data
             const candleData = {
                 time,
                 open: parseFloat(Math.max(0, open).toFixed(8)),
@@ -333,10 +334,10 @@ async function generateHistoricalData(symbol, timeframe, count = 100) {
             candleData.low = Math.min(candleData.open, candleData.high, candleData.low, candleData.close);
             
             data.push(candleData);
-            price = close; // Use close as next open
+            price = close;
         }
         
-        // Sort by time untuk memastikan urutan yang benar
+        // Sort by time
         data.sort((a, b) => a.time - b.time);
         
         console.log(`✅ Generated ${data.length} historical candles for ${symbol}/${timeframe}`);
@@ -348,7 +349,7 @@ async function generateHistoricalData(symbol, timeframe, count = 100) {
     }
 }
 
-// PERBAIKAN: Enhanced chart data initialization
+// Chart data initialization
 async function initializeChartDataForSymbol(symbol, timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']) {
     try {
         console.log(`📊 Initializing chart data for ${symbol}`);
@@ -361,8 +362,6 @@ async function initializeChartDataForSymbol(symbol, timeframes = ['1m', '5m', '1
                 if (historicalData && historicalData.length > 0) {
                     chartDataStore.set(key, historicalData);
                     console.log(`✅ Initialized ${historicalData.length} candles for ${symbol}/${timeframe}`);
-                } else {
-                    console.warn(`⚠️ Failed to generate data for ${symbol}/${timeframe}`);
                 }
             }
         }
@@ -370,6 +369,215 @@ async function initializeChartDataForSymbol(symbol, timeframes = ['1m', '5m', '1
         console.error(`❌ Error initializing chart data for ${symbol}:`, error);
     }
 }
+
+// Price initialization
+async function initializePrices() {
+    const defaultPrices = [
+        { symbol: 'BTC', price: 45000, change: 2.45 },
+        { symbol: 'ETH', price: 3200, change: -1.23 },
+        { symbol: 'LTC', price: 180, change: 0.87 },
+        { symbol: 'XRP', price: 0.65, change: 3.21 },
+        { symbol: 'DOGE', price: 0.08, change: -2.15 },
+        { symbol: 'TRX', price: 0.12, change: 1.45 }
+    ];
+
+    for (const priceData of defaultPrices) {
+        try {
+            await Price.findOneAndUpdate(
+                { symbol: priceData.symbol },
+                priceData,
+                { upsert: true, new: true }
+            );
+            console.log(`✅ Price initialized for ${priceData.symbol}: $${priceData.price}`);
+        } catch (error) {
+            console.error(`❌ Error initializing price for ${priceData.symbol}:`, error);
+        }
+    }
+}
+
+// Price update simulation
+function simulatePriceUpdates() {
+    setInterval(async () => {
+        try {
+            const prices = await Price.find();
+            
+            for (const price of prices) {
+                // Random price change between -3% to +3%
+                const baseVolatility = 0.03;
+                const timeVolatility = 0.01;
+                const totalVolatility = baseVolatility + (Math.random() * timeVolatility);
+                
+                const changePercent = (Math.random() - 0.5) * totalVolatility;
+                const newPrice = Math.max(0.001, price.price * (1 + changePercent));
+                const change = ((newPrice - price.price) / price.price) * 100;
+                
+                price.price = parseFloat(newPrice.toFixed(price.symbol === 'BTC' ? 0 : 6));
+                price.change = parseFloat(change.toFixed(2));
+                price.lastUpdate = new Date();
+                
+                await price.save();
+                
+                // Broadcast price update
+                io.emit('priceUpdate', {
+                    symbol: price.symbol,
+                    price: price.price,
+                    change: price.change,
+                    lastUpdate: price.lastUpdate
+                });
+                
+                // Update chart data
+                const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+                
+                for (const timeframe of timeframes) {
+                    const key = `${price.symbol}-${timeframe}`;
+                    const currentCandles = chartDataStore.get(key) || [];
+                    const lastCandle = currentCandles[currentCandles.length - 1];
+                    
+                    const newCandle = generateCandleFromPrice(price.symbol, timeframe, price.price, lastCandle);
+                    
+                    if (newCandle) {
+                        // Update or add new candle
+                        if (lastCandle && lastCandle.time === newCandle.time) {
+                            currentCandles[currentCandles.length - 1] = newCandle;
+                        } else {
+                            currentCandles.push(newCandle);
+                            if (currentCandles.length > 200) {
+                                currentCandles.shift();
+                            }
+                        }
+                        
+                        chartDataStore.set(key, currentCandles);
+                        
+                        // Broadcast chart update
+                        if (Math.random() < 0.3) {
+                            io.emit('chartUpdate', {
+                                symbol: price.symbol,
+                                timeframe: timeframe,
+                                candle: newCandle
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error updating prices:', error);
+        }
+    }, 3000); // Update every 3 seconds
+}
+
+// Trade completion checker
+function checkTradesToComplete() {
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
+            
+            for (const trade of activeTrades) {
+                const createdAt = new Date(trade.createdAt);
+                const elapsedSeconds = Math.floor((now - createdAt) / 1000);
+                
+                if (elapsedSeconds >= trade.duration) {
+                    // Get current price
+                    const currentPrice = await Price.findOne({ symbol: trade.symbol });
+                    
+                    if (currentPrice) {
+                        trade.exitPrice = currentPrice.price;
+                        trade.status = 'completed';
+                        trade.completedAt = now;
+                        
+                        // Calculate price change
+                        const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
+                        trade.priceChangePercent = priceChangePercent;
+                        
+                        // Determine result berdasarkan Admin Settings
+                        let result;
+                        
+                        // Check admin settings first
+                        if (trade.userId.adminSettings.profitCollapse === 'profit') {
+                            result = 'win';
+                            trade.adminForced = true;
+                            trade.forceResult = 'win';
+                        } else if (trade.userId.adminSettings.profitCollapse === 'collapse') {
+                            result = 'lose';
+                            trade.adminForced = true;
+                            trade.forceResult = 'lose';
+                        } else if (trade.forceResult) {
+                            result = trade.forceResult;
+                            trade.adminForced = true;
+                        } else if (trade.userId.adminSettings.forceWin && trade.userId.adminSettings.forceWinRate > 0) {
+                            const winChance = Math.random() * 100;
+                            if (winChance <= trade.userId.adminSettings.forceWinRate) {
+                                result = 'win';
+                                trade.adminForced = true;
+                            } else {
+                                result = 'lose';
+                                trade.adminForced = true;
+                            }
+                        } else {
+                            // Natural market result
+                            if (trade.direction === 'buy') {
+                                result = currentPrice.price > trade.entryPrice ? 'win' : 'lose';
+                            } else {
+                                result = currentPrice.price < trade.entryPrice ? 'win' : 'lose';
+                            }
+                        }
+                        
+                        trade.result = result;
+                        
+                        // Calculate payout
+                        const profitPercentage = trade.profitPercentage || trade.userId.adminSettings.profitPercentage || 80;
+                        
+                        if (result === 'win') {
+                            trade.payout = trade.amount + (trade.amount * profitPercentage / 100);
+                            trade.userId.balance += trade.payout;
+                            trade.userId.totalProfit += (trade.payout - trade.amount);
+                        } else {
+                            trade.payout = 0;
+                            trade.userId.totalLoss += trade.amount;
+                        }
+                        
+                        // Update user stats
+                        trade.userId.stats.totalTrades += 1;
+                        if (result === 'win') {
+                            trade.userId.stats.winTrades += 1;
+                        } else {
+                            trade.userId.stats.loseTrades += 1;
+                        }
+                        
+                        await trade.save();
+                        await trade.userId.save();
+                        
+                        // Log activity
+                        await logActivity(trade.userId._id, 'TRADE_COMPLETED', `${trade.symbol} ${trade.direction} ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
+                        
+                        // Notify user via socket
+                        io.to(trade.userId._id.toString()).emit('tradeCompleted', {
+                            trade,
+                            result,
+                            payout: trade.payout,
+                            newBalance: trade.userId.balance
+                        });
+                        
+                        console.log(`✅ Trade completed: ${trade._id} - ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error checking trades:', error);
+        }
+    }, 1000); // Check every second
+}
+
+// Database connection check middleware
+const checkDatabaseConnection = (req, res, next) => {
+    if (global.dbConnected === false) {
+        return res.status(503).json({ 
+            error: 'Database temporarily unavailable',
+            message: 'Please try again in a few moments'
+        });
+    }
+    next();
+};
 
 // Authentication middleware
 const authenticateToken = async (req, res, next) => {
@@ -408,221 +616,9 @@ const requireAdmin = async (req, res, next) => {
     }
 };
 
-// PERBAIKAN: Enhanced price initialization dengan lebih banyak crypto
-async function initializePrices() {
-    const defaultPrices = [
-        { symbol: 'BTC', price: 45000, change: 2.45 },
-        { symbol: 'ETH', price: 3200, change: -1.23 },
-        { symbol: 'LTC', price: 180, change: 0.87 },
-        { symbol: 'XRP', price: 0.65, change: 3.21 },
-        { symbol: 'DOGE', price: 0.08, change: -2.15 },
-        { symbol: 'TRX', price: 0.12, change: 1.45 },
-        { symbol: 'ETC', price: 25, change: -0.65 },
-        { symbol: 'NEO', price: 15, change: 2.87 }
-    ];
-
-    for (const priceData of defaultPrices) {
-        try {
-            await Price.findOneAndUpdate(
-                { symbol: priceData.symbol },
-                priceData,
-                { upsert: true, new: true }
-            );
-            console.log(`✅ Price initialized for ${priceData.symbol}: $${priceData.price}`);
-        } catch (error) {
-            console.error(`❌ Error initializing price for ${priceData.symbol}:`, error);
-        }
-    }
-}
-
-// PERBAIKAN: Enhanced price update simulation
-function simulatePriceUpdates() {
-    setInterval(async () => {
-        try {
-            const prices = await Price.find();
-            
-            for (const price of prices) {
-                // Random price change between -3% to +3% dengan realistic movements
-                const baseVolatility = 0.03; // 3% base
-                const timeVolatility = 0.01; // Additional 1% for time-based changes
-                const totalVolatility = baseVolatility + (Math.random() * timeVolatility);
-                
-                const changePercent = (Math.random() - 0.5) * totalVolatility;
-                const newPrice = Math.max(0.001, price.price * (1 + changePercent)); // Prevent negative prices
-                const change = ((newPrice - price.price) / price.price) * 100;
-                
-                price.price = parseFloat(newPrice.toFixed(price.symbol === 'BTC' ? 0 : 6));
-                price.change = parseFloat(change.toFixed(2));
-                price.lastUpdate = new Date();
-                
-                await price.save();
-                
-                // Broadcast price update to all connected clients
-                io.emit('priceUpdate', {
-                    symbol: price.symbol,
-                    price: price.price,
-                    change: price.change,
-                    lastUpdate: price.lastUpdate
-                });
-                
-                // PERBAIKAN: Enhanced chart data updates
-                const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-                
-                for (const timeframe of timeframes) {
-                    const key = `${price.symbol}-${timeframe}`;
-                    const currentCandles = chartDataStore.get(key) || [];
-                    const lastCandle = currentCandles[currentCandles.length - 1];
-                    
-                    const newCandle = generateCandleFromPrice(price.symbol, timeframe, price.price, lastCandle);
-                    
-                    if (newCandle) {
-                        // Update or add new candle
-                        if (lastCandle && lastCandle.time === newCandle.time) {
-                            // Update existing candle
-                            currentCandles[currentCandles.length - 1] = newCandle;
-                        } else {
-                            // Add new candle
-                            currentCandles.push(newCandle);
-                            // Keep only last 200 candles untuk performance
-                            if (currentCandles.length > 200) {
-                                currentCandles.shift();
-                            }
-                        }
-                        
-                        chartDataStore.set(key, currentCandles);
-                        
-                        // Broadcast chart update dengan rate limiting
-                        if (Math.random() < 0.3) { // Only send 30% of updates to prevent spam
-                            io.emit('chartUpdate', {
-                                symbol: price.symbol,
-                                timeframe: timeframe,
-                                candle: newCandle
-                            });
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('❌ Error updating prices:', error);
-        }
-    }, 3000); // Update every 3 seconds
-}
-
-// UPDATED: Trade completion checker dengan Profit Settings dari User
-function checkTradesToComplete() {
-    setInterval(async () => {
-        try {
-            const now = new Date();
-            const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
-            
-            for (const trade of activeTrades) {
-                const createdAt = new Date(trade.createdAt);
-                const elapsedSeconds = Math.floor((now - createdAt) / 1000);
-                
-                if (elapsedSeconds >= trade.duration) {
-                    // Get current price
-                    const currentPrice = await Price.findOne({ symbol: trade.symbol });
-                    
-                    if (currentPrice) {
-                        trade.exitPrice = currentPrice.price;
-                        trade.status = 'completed';
-                        trade.completedAt = now;
-                        
-                        // Calculate price change
-                        const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
-                        trade.priceChangePercent = priceChangePercent;
-                        
-                        // Determine result berdasarkan Admin Settings
-                        let result;
-                        
-                        // Check admin settings first
-                        if (trade.userId.adminSettings.profitCollapse === 'profit') {
-                            result = 'win';
-                            trade.adminForced = true;
-                            trade.forceResult = 'win';
-                        } else if (trade.userId.adminSettings.profitCollapse === 'collapse') {
-                            result = 'lose';
-                            trade.adminForced = true;
-                            trade.forceResult = 'lose';
-                        } else if (trade.forceResult) {
-                            // Manual admin override
-                            result = trade.forceResult;
-                            trade.adminForced = true;
-                        } else if (trade.userId.adminSettings.forceWin && trade.userId.adminSettings.forceWinRate > 0) {
-                            // Force win rate
-                            const winChance = Math.random() * 100;
-                            if (winChance <= trade.userId.adminSettings.forceWinRate) {
-                                result = 'win';
-                                trade.adminForced = true;
-                            } else {
-                                result = 'lose';
-                                trade.adminForced = true;
-                            }
-                        } else {
-                            // Natural market result
-                            if (trade.direction === 'buy') {
-                                result = currentPrice.price > trade.entryPrice ? 'win' : 'lose';
-                            } else {
-                                result = currentPrice.price < trade.entryPrice ? 'win' : 'lose';
-                            }
-                        }
-                        
-                        trade.result = result;
-                        
-                        // Calculate payout menggunakan profit percentage dari user settings
-                        const profitPercentage = trade.profitPercentage || trade.userId.adminSettings.profitPercentage || 80;
-                        
-                        if (result === 'win') {
-                            trade.payout = trade.amount + (trade.amount * profitPercentage / 100);
-                            trade.userId.balance += trade.payout;
-                            trade.userId.totalProfit += (trade.payout - trade.amount);
-                        } else {
-                            trade.payout = 0;
-                            trade.userId.totalLoss += trade.amount;
-                        }
-                        
-                        // Update user stats
-                        trade.userId.stats.totalTrades += 1;
-                        if (result === 'win') {
-                            trade.userId.stats.winTrades += 1;
-                        } else {
-                            trade.userId.stats.loseTrades += 1;
-                        }
-                        
-                        await trade.save();
-                        await trade.userId.save();
-                        
-                        // Log activity
-                        await logActivity(trade.userId._id, 'TRADE_COMPLETED', `${trade.symbol} ${trade.direction} ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
-                        
-                        // UPDATED: Notify user via socket dengan profit/collapse
-                        io.to(trade.userId._id.toString()).emit('tradeCompleted', {
-                            trade,
-                            result,
-                            payout: trade.payout,
-                            newBalance: trade.userId.balance
-                        });
-                        
-                        console.log(`✅ Trade completed: ${trade._id} - ${result} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('Error checking trades:', error);
-        }
-    }, 1000); // Check every second
-}
-
-// Database connection check middleware
-const checkDatabaseConnection = (req, res, next) => {
-    if (global.dbConnected === false) {
-        return res.status(503).json({ 
-            error: 'Database temporarily unavailable',
-            message: 'Please try again in a few moments'
-        });
-    }
-    next();
-};
+// ========================================
+// ROUTES
+// ========================================
 
 // Root route
 app.get('/', (req, res) => {
@@ -630,7 +626,16 @@ app.get('/', (req, res) => {
         message: 'TradeStation Backend API',
         version: '2.5.0',
         status: 'Running',
-        features: ['Bank Account Management', 'File Upload', 'Admin Trading Control', 'Profit Settings', 'Password Management', 'User Bank Data Management', 'Enhanced Real-time Chart Data', 'Improved Rate Limiting'],
+        features: [
+            'Email Authentication',
+            'Mobile-First Trading',
+            'Real-time Chart Data',
+            'Bank Account Management', 
+            'File Upload', 
+            'Admin Trading Control', 
+            'Profit Settings',
+            'Enhanced Mobile UI'
+        ],
         endpoints: {
             health: '/api/health',
             register: 'POST /api/register',
@@ -655,14 +660,13 @@ app.get('/api/health', (req, res) => {
         environment: process.env.NODE_ENV || 'development',
         database: global.dbConnected !== false ? 'Connected' : 'Disconnected',
         port: process.env.PORT || 3000,
-        chartDataStatus: `${chartDataStore.size} chart datasets loaded`,
-        rateLimiting: 'Enhanced - 200 requests/15min general, 20 auth/15min'
+        chartDataStatus: `${chartDataStore.size} chart datasets loaded`
     };
     
     res.json(health);
 });
 
-// PERBAIKAN: Enhanced Chart Data Routes dengan error handling yang lebih baik
+// Chart Data Routes
 app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
     try {
         const { symbol, timeframe } = req.params;
@@ -745,62 +749,30 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
     }
 });
 
-// PERBAIKAN: Tambahan endpoint untuk debug chart data
-app.get('/api/chart-debug/:symbol/:timeframe', async (req, res) => {
-    try {
-        const { symbol, timeframe } = req.params;
-        const key = `${symbol.toUpperCase()}-${timeframe}`;
-        const chartData = chartDataStore.get(key);
-        
-        res.json({
-            symbol: symbol.toUpperCase(),
-            timeframe,
-            hasData: !!chartData,
-            dataLength: chartData ? chartData.length : 0,
-            firstCandle: chartData && chartData.length > 0 ? chartData[0] : null,
-            lastCandle: chartData && chartData.length > 0 ? chartData[chartData.length - 1] : null,
-            chartDataStoreSize: chartDataStore.size,
-            allKeys: Array.from(chartDataStore.keys())
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
 // Auth Routes
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
         // Validation
-        if (!name || !password) {
-            return res.status(400).json({ error: 'Name and password are required' });
+        if (!name || !email || !password) {
+            return res.status(400).json({ error: 'Name, email, and password are required' });
         }
         
-        if (!email && !phone) {
-            return res.status(400).json({ error: 'Email or phone is required' });
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ error: 'Invalid email format' });
         }
         
         if (password.length < 6) {
             return res.status(400).json({ error: 'Password must be at least 6 characters' });
         }
         
-        // Set email jika hanya ada phone
-        let userEmail = email;
-        if (!email && phone) {
-            userEmail = `${phone}@phone.temp`;
-        }
-        
         // Check if user exists
-        const existingUser = await User.findOne({ 
-            $or: [
-                { email: userEmail },
-                { phone: phone }
-            ]
-        });
-        
+        const existingUser = await User.findOne({ email });
         if (existingUser) {
-            return res.status(400).json({ error: 'Email or phone already registered' });
+            return res.status(400).json({ error: 'Email already registered' });
         }
         
         // Hash password
@@ -809,7 +781,7 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         // Create user dengan default profit settings
         const user = new User({
             name,
-            email: userEmail,
+            email,
             phone,
             password: hashedPassword,
             referralCode: generateReferralCode(),
@@ -822,7 +794,7 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         await user.save();
         
         // Log activity
-        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${userEmail}`);
+        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email}`);
         
         // Generate token
         const token = jwt.sign(
@@ -843,30 +815,26 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         
     } catch (error) {
         console.error('Registration error:', error);
-        // ALWAYS return JSON, even for errors
-        res.status(500).json({ 
-            error: 'Registration failed', 
-            message: 'Internal server error',
-            timestamp: new Date().toISOString()
-        });
+        res.status(500).json({ error: 'Registration failed' });
     }
 });
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { email, password } = req.body; // email bisa berisi email atau phone
+        const { email, password } = req.body;
         
         if (!email || !password) {
-            return res.status(400).json({ error: 'Email/Phone and password are required' });
+            return res.status(400).json({ error: 'Email and password are required' });
         }
         
-        // Check if input is email or phone
-        let user;
-        if (email.includes('@')) {
-            user = await User.findOne({ email });
-        } else {
-            user = await User.findOne({ phone: email });
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ error: 'Invalid email format' });
         }
+        
+        // Find user by email
+        const user = await User.findOne({ email });
         
         if (!user) {
             return res.status(400).json({ error: 'Invalid credentials' });
@@ -903,12 +871,7 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         
     } catch (error) {
         console.error('Login error:', error);
-        // ALWAYS return JSON, even for errors
-        res.status(500).json({ 
-            error: 'Login failed', 
-            message: 'Internal server error',
-            timestamp: new Date().toISOString()
-        });
+        res.status(500).json({ error: 'Login failed' });
     }
 });
 
@@ -991,10 +954,10 @@ app.get('/api/prices', async (req, res) => {
     }
 });
 
-// UPDATED: Trading Routes - tanpa profitPercentage
+// Trading Routes
 app.post('/api/trade', authenticateToken, async (req, res) => {
     try {
-        const { symbol, direction, amount, duration } = req.body; // Hilangkan profitPercentage
+        const { symbol, direction, amount, duration } = req.body;
         
         // Validation
         if (!symbol || !direction || !amount || !duration) {
@@ -1028,7 +991,7 @@ app.post('/api/trade', authenticateToken, async (req, res) => {
             symbol,
             direction,
             amount,
-            profitPercentage, // Diambil dari user settings
+            profitPercentage,
             duration,
             entryPrice: currentPrice.price
         });
@@ -1079,7 +1042,7 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
 // Deposit Routes
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
-        const { amount, receipt, fileName, fileType } = req.body;
+        const { amount, receipt, fileName, fileType, bankFrom } = req.body;
         
         if (!amount || amount < 50000) {
             return res.status(400).json({ error: 'Minimum deposit is Rp 50,000' });
@@ -1098,6 +1061,7 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
         const deposit = new Deposit({
             userId: req.userId,
             amount,
+            bankFrom,
             receipt,
             fileName,
             fileType,
@@ -1194,7 +1158,7 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     }
 });
 
-// Admin Routes
+// Admin Routes (Add more as needed)
 app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
     try {
         // Get statistics
@@ -1206,439 +1170,22 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
         const pendingDeposits = await Deposit.countDocuments({ status: 'pending' });
         const totalWithdrawals = await Withdrawal.countDocuments();
         const pendingWithdrawals = await Withdrawal.countDocuments({ status: 'pending' });
-        const totalBankAccounts = await BankAccount.countDocuments();
-        const activeBankAccounts = await BankAccount.countDocuments({ isActive: true });
-        
-        // Calculate volumes
-        const allTrades = await Trade.find({ status: 'completed' });
-        const totalVolume = allTrades.reduce((sum, trade) => sum + trade.amount, 0);
-        
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayTrades = await Trade.find({ 
-            status: 'completed', 
-            createdAt: { $gte: today } 
-        });
-        const todayVolume = todayTrades.reduce((sum, trade) => sum + trade.amount, 0);
-        
-        // Get recent activities
-        const recentActivities = await Activity.find()
-            .populate('userId', 'name')
-            .sort({ createdAt: -1 })
-            .limit(20);
         
         const stats = {
             users: { total: totalUsers, active: activeUsers },
             trades: { total: totalTrades, active: activeTrades },
             deposits: { total: totalDeposits, pending: pendingDeposits },
-            withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
-            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts },
-            volume: { total: totalVolume, today: todayVolume }
+            withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals }
         };
         
-        res.json({ stats, recentActivities });
+        res.json({ stats });
     } catch (error) {
         console.error('Admin dashboard error:', error);
         res.status(500).json({ error: 'Failed to load dashboard' });
     }
 });
 
-app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const users = await User.find().select('-password').sort({ createdAt: -1 });
-        res.json({ users });
-    } catch (error) {
-        console.error('Admin users error:', error);
-        res.status(500).json({ error: 'Failed to load users' });
-    }
-});
-
-app.get('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const user = await User.findById(req.params.userId).select('-password');
-        const trades = await Trade.find({ userId: req.params.userId }).sort({ createdAt: -1 });
-        const deposits = await Deposit.find({ userId: req.params.userId }).sort({ createdAt: -1 });
-        const withdrawals = await Withdrawal.find({ userId: req.params.userId }).sort({ createdAt: -1 });
-        
-        res.json({ user, trades, deposits, withdrawals });
-    } catch (error) {
-        console.error('Admin user detail error:', error);
-        res.status(500).json({ error: 'Failed to load user details' });
-    }
-});
-
-// UPDATED: User Management dengan Profit Settings
-app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { name, email, balance, phone, accountType, isActive, adminSettings } = req.body;
-        
-        const updateData = {
-            name, 
-            email, 
-            balance, 
-            phone, 
-            accountType, 
-            isActive
-        };
-        
-        // Update admin settings jika ada
-        if (adminSettings) {
-            updateData.adminSettings = {
-                ...adminSettings,
-                profitPercentage: adminSettings.profitPercentage || 80 // Ensure default
-            };
-        }
-        
-        const user = await User.findByIdAndUpdate(
-            req.params.userId,
-            updateData,
-            { new: true }
-        ).select('-password');
-        
-        await logActivity(req.params.userId, 'ADMIN_UPDATE', `Profile updated by admin`);
-        
-        res.json({ user });
-    } catch (error) {
-        console.error('Admin user update error:', error);
-        res.status(500).json({ error: 'Failed to update user' });
-    }
-});
-
-// PERBAIKAN 3: BANK DATA MANAGEMENT FOR USERS FROM ADMIN
-app.get('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const user = await User.findById(req.params.userId).select('bankData name email');
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        res.json({ 
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email
-            },
-            bankData: user.bankData || {} 
-        });
-    } catch (error) {
-        console.error('Admin user bank data error:', error);
-        res.status(500).json({ error: 'Failed to load user bank data' });
-    }
-});
-
-app.put('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { bankName, accountNumber, accountHolder } = req.body;
-        
-        const user = await User.findByIdAndUpdate(
-            req.params.userId,
-            { 
-                bankData: { bankName, accountNumber, accountHolder }
-            },
-            { new: true }
-        ).select('-password');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        await logActivity(req.params.userId, 'ADMIN_BANK_UPDATE', `Bank data updated by admin: ${bankName}`);
-        
-        res.json({ 
-            message: 'User bank data updated successfully',
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email
-            },
-            bankData: user.bankData 
-        });
-    } catch (error) {
-        console.error('Admin user bank update error:', error);
-        res.status(500).json({ error: 'Failed to update user bank data' });
-    }
-});
-
-app.delete('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const user = await User.findByIdAndUpdate(
-            req.params.userId,
-            { 
-                $unset: { bankData: 1 }
-            },
-            { new: true }
-        ).select('-password');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        await logActivity(req.params.userId, 'ADMIN_BANK_DELETE', `Bank data deleted by admin`);
-        
-        res.json({ 
-            message: 'User bank data deleted successfully',
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email
-            }
-        });
-    } catch (error) {
-        console.error('Admin user bank delete error:', error);
-        res.status(500).json({ error: 'Failed to delete user bank data' });
-    }
-});
-
-// BARU: Change Password untuk User
-app.put('/api/admin/user/:userId/password', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { newPassword } = req.body;
-        
-        if (!newPassword || newPassword.length < 6) {
-            return res.status(400).json({ error: 'Password must be at least 6 characters' });
-        }
-        
-        const hashedPassword = await bcrypt.hash(newPassword, 12);
-        
-        await User.findByIdAndUpdate(req.params.userId, {
-            password: hashedPassword
-        });
-        
-        await logActivity(req.params.userId, 'ADMIN_PASSWORD_CHANGE', 'Password changed by admin');
-        
-        res.json({ message: 'Password changed successfully' });
-    } catch (error) {
-        console.error('Admin password change error:', error);
-        res.status(500).json({ error: 'Failed to change password' });
-    }
-});
-
-app.delete('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        await User.findByIdAndUpdate(req.params.userId, { isActive: false });
-        await logActivity(req.params.userId, 'ADMIN_DEACTIVATE', `User deactivated by admin`);
-        
-        res.json({ message: 'User deactivated successfully' });
-    } catch (error) {
-        console.error('Admin user delete error:', error);
-        res.status(500).json({ error: 'Failed to deactivate user' });
-    }
-});
-
-app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { status } = req.query;
-        let query = {};
-        if (status) query.status = status;
-        
-        const trades = await Trade.find(query)
-            .populate('userId', 'name email')
-            .sort({ createdAt: -1 });
-        
-        res.json({ trades });
-    } catch (error) {
-        console.error('Admin trades error:', error);
-        res.status(500).json({ error: 'Failed to load trades' });
-    }
-});
-
-app.put('/api/admin/trade/:tradeId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { forceResult } = req.body;
-        
-        const trade = await Trade.findByIdAndUpdate(
-            req.params.tradeId,
-            { forceResult },
-            { new: true }
-        );
-        
-        await logActivity(trade.userId, 'ADMIN_TRADE_CONTROL', `Trade ${forceResult} forced by admin`);
-        
-        res.json({ trade });
-    } catch (error) {
-        console.error('Admin trade control error:', error);
-        res.status(500).json({ error: 'Failed to control trade' });
-    }
-});
-
-app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { status } = req.query;
-        let query = {};
-        if (status) query.status = status;
-        
-        const deposits = await Deposit.find(query)
-            .populate('userId', 'name email')
-            .sort({ createdAt: -1 });
-        
-        res.json({ deposits });
-    } catch (error) {
-        console.error('Admin deposits error:', error);
-        res.status(500).json({ error: 'Failed to load deposits' });
-    }
-});
-
-app.put('/api/admin/deposit/:depositId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { status, adminNotes } = req.body;
-        
-        const deposit = await Deposit.findById(req.params.depositId).populate('userId');
-        
-        if (!deposit) {
-            return res.status(404).json({ error: 'Deposit not found' });
-        }
-        
-        deposit.status = status;
-        deposit.adminNotes = adminNotes;
-        deposit.processedAt = new Date();
-        
-        if (status === 'approved') {
-            // Add amount to user balance
-            deposit.userId.balance += deposit.amount;
-            await deposit.userId.save();
-            
-            // Notify user via socket
-            io.to(deposit.userId._id.toString()).emit('depositApproved', {
-                amount: deposit.amount,
-                newBalance: deposit.userId.balance
-            });
-        }
-        
-        await deposit.save();
-        await logActivity(deposit.userId._id, 'DEPOSIT_' + status.toUpperCase(), `Deposit ${status} by admin`);
-        
-        res.json({ deposit });
-    } catch (error) {
-        console.error('Admin deposit update error:', error);
-        res.status(500).json({ error: 'Failed to update deposit' });
-    }
-});
-
-app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { status } = req.query;
-        let query = {};
-        if (status) query.status = status;
-        
-        const withdrawals = await Withdrawal.find(query)
-            .populate('userId', 'name email')
-            .sort({ createdAt: -1 });
-        
-        res.json({ withdrawals });
-    } catch (error) {
-        console.error('Admin withdrawals error:', error);
-        res.status(500).json({ error: 'Failed to load withdrawals' });
-    }
-});
-
-app.put('/api/admin/withdrawal/:withdrawalId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { status, adminNotes } = req.body;
-        
-        const withdrawal = await Withdrawal.findById(req.params.withdrawalId).populate('userId');
-        
-        if (!withdrawal) {
-            return res.status(404).json({ error: 'Withdrawal not found' });
-        }
-        
-        withdrawal.status = status;
-        withdrawal.adminNotes = adminNotes;
-        withdrawal.processedAt = new Date();
-        
-        if (status === 'rejected') {
-            // Refund amount to user balance
-            withdrawal.userId.balance += withdrawal.amount;
-            await withdrawal.userId.save();
-        }
-        
-        await withdrawal.save();
-        await logActivity(withdrawal.userId._id, 'WITHDRAWAL_' + status.toUpperCase(), `Withdrawal ${status} by admin`);
-        
-        res.json({ withdrawal });
-    } catch (error) {
-        console.error('Admin withdrawal update error:', error);
-        res.status(500).json({ error: 'Failed to update withdrawal' });
-    }
-});
-
-// Bank Account Management Routes
-app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const accounts = await BankAccount.find().sort({ createdAt: -1 });
-        res.json({ accounts });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to load bank accounts' });
-    }
-});
-
-app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { bankName, accountNumber, accountHolder, note } = req.body;
-        
-        const account = new BankAccount({
-            bankName,
-            accountNumber,
-            accountHolder,
-            note
-        });
-        
-        await account.save();
-        await logActivity(req.userId, 'BANK_ACCOUNT_CREATE', `Bank account created: ${bankName} - ${accountNumber}`);
-        
-        res.status(201).json({ account });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to create bank account' });
-    }
-});
-
-app.put('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { isActive, bankName, accountNumber, accountHolder, note } = req.body;
-        
-        const account = await BankAccount.findByIdAndUpdate(
-            req.params.id,
-            { isActive, bankName, accountNumber, accountHolder, note },
-            { new: true }
-        );
-        
-        await logActivity(req.userId, 'BANK_ACCOUNT_UPDATE', `Bank account updated: ${bankName}`);
-        
-        res.json({ account });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update bank account' });
-    }
-});
-
-app.patch('/api/admin/bank-accounts/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const account = await BankAccount.findById(req.params.id);
-        account.isActive = !account.isActive;
-        await account.save();
-        
-        await logActivity(req.userId, 'BANK_ACCOUNT_TOGGLE', `Bank account ${account.isActive ? 'activated' : 'deactivated'}: ${account.bankName}`);
-        
-        res.json({ 
-            message: `Bank account ${account.isActive ? 'activated' : 'deactivated'}`,
-            account 
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to toggle bank account status' });
-    }
-});
-
-app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const account = await BankAccount.findByIdAndDelete(req.params.id);
-        
-        await logActivity(req.userId, 'BANK_ACCOUNT_DELETE', `Bank account deleted: ${account.bankName}`);
-        
-        res.json({ message: 'Bank account deleted successfully' });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to delete bank account' });
-    }
-});
-
-// Socket.IO connection handling dengan CHART SUBSCRIPTION
+// Socket.IO connection handling
 io.on('connection', (socket) => {
     console.log('👤 User connected:', socket.id);
     
@@ -1651,7 +1198,6 @@ io.on('connection', (socket) => {
         console.log('📊 User subscribed to price updates');
     });
     
-    // PERBAIKAN: Enhanced chart subscription dengan error handling
     socket.on('subscribe_charts', (data) => {
         try {
             const { symbol, timeframe } = data;
@@ -1671,8 +1217,6 @@ io.on('connection', (socket) => {
                     candle: lastCandle
                 });
                 console.log(`📊 Sent initial chart data to user: ${symbol}/${timeframe}`);
-            } else {
-                console.log(`📊 No chart data available for: ${symbol}/${timeframe}`);
             }
         } catch (error) {
             console.error('❌ Error in chart subscription:', error);
@@ -1687,21 +1231,12 @@ io.on('connection', (socket) => {
 // Global error handler
 app.use((error, req, res, next) => {
     console.error('❌ Global error:', error);
-    res.status(500).json({ 
-        error: 'Internal server error',
-        message: error.message,
-        timestamp: new Date().toISOString()
-    });
+    res.status(500).json({ error: 'Internal server error' });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-    res.status(404).json({ 
-        error: 'Route not found',
-        path: req.originalUrl,
-        method: req.method,
-        timestamp: new Date().toISOString()
-    });
+    res.status(404).json({ error: 'Route not found' });
 });
 
 // Start server
@@ -1711,15 +1246,13 @@ server.listen(PORT, '0.0.0.0', async () => {
 🚀 TradeStation Backend Server Started!
 📍 Port: ${PORT}
 🌍 Environment: ${process.env.NODE_ENV || 'development'}
-📡 Socket.IO: Enabled
+📧 Email Authentication: Enabled
+📱 Mobile-First Design: Supported
+📊 Real-time Chart Data: Enhanced
 🛡️  Security: Enabled
 💳 Bank Management: Enabled
 🎯 Trading Control: Enabled
 💰 Profit Settings: Enabled
-🔐 Password Management: Enabled
-🏦 User Bank Data Management: Enabled
-📊 Enhanced Real-time Chart Data: Enabled
-⚡ Rate Limiting: Enhanced (200 general / 20 auth per 15min)
 ⏰ Timestamp: ${new Date().toISOString()}
 `);
 
@@ -1751,7 +1284,7 @@ server.listen(PORT, '0.0.0.0', async () => {
                 }
             });
             await admin.save();
-            console.log('✅ Default admin user created');
+            console.log('✅ Default admin user created (admin@tradestation.com / admin123)');
         }
         
         // Initialize sample bank accounts
@@ -1784,7 +1317,7 @@ server.listen(PORT, '0.0.0.0', async () => {
         await initializePrices();
         console.log('✅ Prices initialized');
         
-        // PERBAIKAN: Enhanced chart data initialization
+        // Initialize chart data for all symbols
         console.log('📊 Initializing chart data for all symbols...');
         const symbols = await Price.find();
         
