@@ -57,11 +57,22 @@ const authLimiter = rateLimit({
 // DATABASE MODELS
 // ========================================
 
-// User Schema - ENHANCED
+// User Schema - ENHANCED dengan validasi terbaik dari Dokumen 1
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true, minlength: 2 },
-    email: { type: String, trim: true, lowercase: true, sparse: true },
-    phone: { type: String, trim: true, sparse: true },
+    email: { 
+        type: String, 
+        trim: true, 
+        lowercase: true, 
+        sparse: true,  // Ini penting: index sparse
+        default: null  // Default null bukan undefined
+    },
+    phone: { 
+        type: String, 
+        trim: true, 
+        sparse: true,  // Ini penting: index sparse
+        default: null  // Default null bukan undefined
+    },
     password: { type: String, required: true, minlength: 6 },
     balance: { type: Number, default: 0, min: 0 },
     accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
@@ -106,9 +117,26 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// Ensure unique email or phone
-userSchema.index({ email: 1 }, { unique: true, sparse: true });
-userSchema.index({ phone: 1 }, { unique: true, sparse: true });
+// PERBAIKAN INDEX dari Dokumen 1: Pastikan unique tapi sparse untuk email dan phone
+userSchema.index({ email: 1 }, { 
+    unique: true, 
+    sparse: true,
+    partialFilterExpression: { email: { $exists: true, $ne: null } }
+});
+userSchema.index({ phone: 1 }, { 
+    unique: true, 
+    sparse: true,
+    partialFilterExpression: { phone: { $exists: true, $ne: null } }
+});
+
+// Custom validation dari Dokumen 1: user harus punya email ATAU phone
+userSchema.pre('validate', function(next) {
+    if (!this.email && !this.phone) {
+        this.invalidate('email', 'Either email or phone number is required');
+        this.invalidate('phone', 'Either email or phone number is required');
+    }
+    next();
+});
 
 // Pre-save middleware to ensure adminSettings defaults
 userSchema.pre('save', function(next) {
@@ -750,8 +778,23 @@ function formatCurrency(amount) {
     }).format(amount || 0);
 }
 
+// FUNGSI VALIDASI TERBAIK dari Dokumen 1
+function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+}
+
+function isValidPhone(phone) {
+    if (!phone || typeof phone !== 'string') return false;
+    // Mendukung format Indonesia: 08xxx, +628xxx, 628xxx, atau international
+    const phoneRegex = /^(\+?62|0)[0-9]{9,13}$/;
+    const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Remove spaces, dashes, parentheses
+    return phoneRegex.test(cleanPhone);
+}
+
 // ========================================
-// DATABASE OPTIMIZATION MIDDLEWARE
+// DATABASE OPTIMIZATION MIDDLEWARE dari Dokumen 2
 // ========================================
 
 // Add connection monitoring
@@ -783,7 +826,7 @@ setInterval(() => {
 }, 30000); // Check every 30 seconds
 
 // ========================================
-// IMPROVED ERROR HANDLING
+// IMPROVED ERROR HANDLING dari Dokumen 2
 // ========================================
 
 // Global error handler untuk unhandled promises
@@ -799,7 +842,7 @@ process.on('uncaughtException', (error) => {
 });
 
 // ========================================
-// DATABASE INDEX OPTIMIZATION
+// DATABASE INDEX OPTIMIZATION dari Dokumen 2
 // ========================================
 
 // Ensure proper indexes for performance
@@ -831,13 +874,16 @@ async function ensureIndexes() {
 // Enhanced root route
 app.get('/', (req, res) => {
     res.json({
-        message: 'TradeStation Backend API',
-        version: '3.1.0',
+        message: 'TradeStation Backend API - Best Combined Version',
+        version: '3.2.0',
         status: 'Running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         features: [
-            'Email/Phone Authentication',
+            'Enhanced Email/Phone Authentication (Best from Doc 1)',
+            'Robust Admin Panel with Timeouts (Best from Doc 2)',
+            'Performance Optimization for Many Users',
+            'Advanced Monitoring & Debugging',
             'Mobile-First Trading',
             'Real-time Chart Data',
             'Bank Account Management', 
@@ -847,6 +893,14 @@ app.get('/', (req, res) => {
             'Enhanced Mobile UI',
             'Complete Admin Panel',
             'Enhanced Security & Validation'
+        ],
+        improvements: [
+            'Combined best registration system from Dokumen 1',
+            'Enhanced admin deposit management from Dokumen 2',
+            'Database optimization and monitoring',
+            'Memory usage tracking',
+            'Query timeout handling',
+            'Better error handling for production'
         ],
         endpoints: {
             health: 'GET /api/health',
@@ -866,7 +920,7 @@ app.get('/', (req, res) => {
 app.get('/api/health', (req, res) => {
     const health = {
         status: 'OK', 
-        message: 'TradeStation Backend is running smoothly',
+        message: 'TradeStation Backend is running smoothly - Combined Best Version',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         database: {
@@ -962,7 +1016,7 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
             lastUpdate: priceData.lastUpdate,
             metadata: {
                 generated: new Date().toISOString(),
-                source: 'TradeStation API v3.1.0'
+                source: 'TradeStation API v3.2.0 - Combined Best Version'
             }
         };
         
@@ -981,61 +1035,62 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
 });
 
 // ========================================
-// AUTH ROUTES
+// AUTH ROUTES - TERBAIK dari Dokumen 1
 // ========================================
 
-// Enhanced register route
+// REGISTER ROUTE dengan validasi terbaik dari Dokumen 1
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
+        console.log('📝 Register request:', { name, email: !!email, phone: !!phone, password: !!password });
+        
         // Enhanced validation
         if (!name || name.trim().length < 2) {
-            return res.status(400).json({ error: 'Name must be at least 2 characters long' });
+            return res.status(400).json({ error: 'Nama harus minimal 2 karakter' });
         }
 
         if (!password || password.length < 6) {
-            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+            return res.status(400).json({ error: 'Password harus minimal 6 karakter' });
         }
 
+        // PERBAIKAN: User harus punya email ATAU phone (tidak keduanya)
         if (!email && !phone) {
-            return res.status(400).json({ error: 'Email or phone number is required' });
+            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
         }
         
-        // Enhanced email validation
-        if (email) {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email)) {
-                return res.status(400).json({ error: 'Invalid email format' });
-            }
+        // Validasi email jika ada
+        if (email && !isValidEmail(email)) {
+            return res.status(400).json({ error: 'Format email tidak valid' });
         }
         
-        // Enhanced phone validation
-        if (phone) {
-            const phoneRegex = /^[+]?[\d\s\-\(\)]{8,}$/;
-            if (!phoneRegex.test(phone)) {
-                return res.status(400).json({ error: 'Invalid phone number format' });
-            }
+        // Validasi phone jika ada
+        if (phone && !isValidPhone(phone)) {
+            return res.status(400).json({ error: 'Format nomor HP tidak valid. Gunakan format: 08xxx atau +628xxx' });
         }
         
-        // Check if user exists
+        // PERBAIKAN: Check existing user dengan logic yang lebih baik
         let existingUser = null;
+        
         if (email) {
-            existingUser = await User.findOne({ email: email.toLowerCase() });
+            existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+            if (existingUser) {
+                return res.status(400).json({ error: 'Email sudah terdaftar' });
+            }
         }
         
-        if (phone && !existingUser) {
-            existingUser = await User.findOne({ phone });
-        }
-        
-        if (existingUser) {
-            return res.status(400).json({ error: 'Email or phone already registered' });
+        if (phone) {
+            const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone number
+            existingUser = await User.findOne({ phone: cleanPhone });
+            if (existingUser) {
+                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+            }
         }
         
         // Enhanced password hashing
         const hashedPassword = await bcrypt.hash(password, 12);
         
-        // Create user dengan enhanced default settings
+        // PERBAIKAN: Create user dengan data yang bersih
         const userData = {
             name: name.trim(),
             password: hashedPassword,
@@ -1054,8 +1109,20 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             }
         };
 
-        if (email) userData.email = email.toLowerCase();
-        if (phone) userData.phone = phone;
+        // PERBAIKAN: Hanya set field yang ada datanya
+        if (email) {
+            userData.email = email.toLowerCase().trim();
+        }
+        if (phone) {
+            userData.phone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone
+        }
+        
+        console.log('📝 Creating user with data:', { 
+            name: userData.name, 
+            email: userData.email, 
+            phone: userData.phone,
+            hasPassword: !!userData.password 
+        });
         
         const user = new User(userData);
         await user.save();
@@ -1075,7 +1142,7 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         delete userResponse.password;
         
         res.status(201).json({
-            message: 'Registration successful',
+            message: 'Pendaftaran berhasil',
             token,
             user: userResponse
         });
@@ -1084,46 +1151,74 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         
     } catch (error) {
         console.error('❌ Registration error:', error);
-        res.status(500).json({ error: 'Registration failed. Please try again.' });
+        
+        // Handle MongoDB errors
+        if (error.code === 11000) {
+            if (error.keyPattern.email) {
+                return res.status(400).json({ error: 'Email sudah terdaftar' });
+            }
+            if (error.keyPattern.phone) {
+                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+            }
+            return res.status(400).json({ error: 'Data sudah terdaftar' });
+        }
+        
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ 
+                error: 'Data tidak valid', 
+                details: validationErrors 
+            });
+        }
+        
+        res.status(500).json({ error: 'Pendaftaran gagal. Silakan coba lagi.' });
     }
 });
 
-// Enhanced login route
+// LOGIN ROUTE dengan validasi terbaik dari Dokumen 1
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { email, phone, password } = req.body;
         
+        console.log('📝 Login request:', { email: !!email, phone: !!phone, password: !!password });
+        
         if (!password) {
-            return res.status(400).json({ error: 'Password is required' });
+            return res.status(400).json({ error: 'Password diperlukan' });
         }
 
         if (!email && !phone) {
-            return res.status(400).json({ error: 'Email or phone number is required' });
+            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
         }
         
-        // Find user by email or phone
+        // PERBAIKAN: Find user dengan logic yang lebih baik
         let user = null;
+        
         if (email) {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email)) {
-                return res.status(400).json({ error: 'Invalid email format' });
+            // Coba cari dengan email
+            if (isValidEmail(email)) {
+                user = await User.findOne({ email: email.toLowerCase().trim() });
             }
-            user = await User.findOne({ email: email.toLowerCase() });
-        } else if (phone) {
-            user = await User.findOne({ phone });
+        }
+        
+        if (!user && phone) {
+            // Jika tidak ketemu dengan email, coba dengan phone
+            const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
+            if (isValidPhone(cleanPhone)) {
+                user = await User.findOne({ phone: cleanPhone });
+            }
         }
         
         if (!user) {
-            return res.status(400).json({ error: 'Invalid credentials' });
+            return res.status(400).json({ error: 'Email/HP atau password salah' });
         }
         
         if (!user.isActive) {
-            return res.status(400).json({ error: 'Account is deactivated. Please contact support.' });
+            return res.status(400).json({ error: 'Akun dinonaktifkan. Hubungi customer service.' });
         }
         
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
-            return res.status(400).json({ error: 'Invalid credentials' });
+            return res.status(400).json({ error: 'Email/HP atau password salah' });
         }
         
         // Update last login
@@ -1142,7 +1237,7 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         delete userResponse.password;
         
         res.json({
-            message: 'Login successful',
+            message: 'Login berhasil',
             token,
             user: userResponse
         });
@@ -1151,12 +1246,12 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         
     } catch (error) {
         console.error('❌ Login error:', error);
-        res.status(500).json({ error: 'Login failed. Please try again.' });
+        res.status(500).json({ error: 'Login gagal. Silakan coba lagi.' });
     }
 });
 
 // ========================================
-// USER ROUTES
+// USER ROUTES (tetap sama)
 // ========================================
 
 app.get('/api/profile', authenticateToken, async (req, res) => {
@@ -1256,7 +1351,7 @@ app.get('/api/prices', async (req, res) => {
 });
 
 // ========================================
-// TRADING ROUTES
+// TRADING ROUTES (tetap sama)
 // ========================================
 
 // Enhanced trading route
@@ -1381,7 +1476,7 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
 });
 
 // ========================================
-// DEPOSIT ROUTES
+// DEPOSIT ROUTES (tetap sama)
 // ========================================
 
 app.post('/api/deposit', authenticateToken, async (req, res) => {
@@ -1457,7 +1552,7 @@ app.get('/api/deposits', authenticateToken, async (req, res) => {
 });
 
 // ========================================
-// WITHDRAWAL ROUTES
+// WITHDRAWAL ROUTES (tetap sama)
 // ========================================
 
 app.post('/api/withdrawal', authenticateToken, async (req, res) => {
@@ -1544,7 +1639,7 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
 });
 
 // ========================================
-// ADMIN ROUTES
+// ADMIN ROUTES - TERBAIK dari Dokumen 2
 // ========================================
 
 // Enhanced Admin Dashboard
@@ -1738,113 +1833,6 @@ app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res)
     }
 });
 
-app.put('/api/admin/user/:id/password', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { newPassword } = req.body;
-        
-        if (!newPassword || newPassword.length < 6) {
-            return res.status(400).json({ error: 'Password must be at least 6 characters' });
-        }
-        
-        const hashedPassword = await bcrypt.hash(newPassword, 12);
-        
-        const user = await User.findByIdAndUpdate(
-            id,
-            { password: hashedPassword },
-            { new: true }
-        ).select('-password');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        await logActivity(req.userId, 'ADMIN_PASSWORD_CHANGE', `Changed password for user: ${user.name}`, req);
-        
-        res.json({ message: 'Password changed successfully' });
-        
-        console.log(`✅ Password changed by admin for user: ${user.name}`);
-        
-    } catch (error) {
-        console.error('❌ Admin password change error:', error);
-        res.status(500).json({ error: 'Failed to change password' });
-    }
-});
-
-// User Bank Data Management
-app.get('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const user = await User.findById(id).select('bankData name email phone');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        res.json({ bankData: user.bankData });
-    } catch (error) {
-        console.error('❌ Admin user bank error:', error);
-        res.status(500).json({ error: 'Failed to load user bank data' });
-    }
-});
-
-app.put('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { bankName, accountNumber, accountHolder } = req.body;
-        
-        if (!bankName || !accountNumber || !accountHolder) {
-            return res.status(400).json({ error: 'All bank data fields are required' });
-        }
-        
-        const user = await User.findByIdAndUpdate(
-            id,
-            { 
-                bankData: { 
-                    bankName: bankName.trim(), 
-                    accountNumber: accountNumber.trim(), 
-                    accountHolder: accountHolder.trim() 
-                }
-            },
-            { new: true }
-        ).select('-password');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        await logActivity(req.userId, 'ADMIN_BANK_UPDATE', `Updated bank data for user: ${user.name}`, req);
-        
-        res.json({ message: 'Bank data updated successfully' });
-    } catch (error) {
-        console.error('❌ Admin user bank update error:', error);
-        res.status(500).json({ error: 'Failed to update bank data' });
-    }
-});
-
-app.delete('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        
-        const user = await User.findByIdAndUpdate(
-            id,
-            { $unset: { bankData: 1 } },
-            { new: true }
-        ).select('-password');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        await logActivity(req.userId, 'ADMIN_BANK_DELETE', `Deleted bank data for user: ${user.name}`, req);
-        
-        res.json({ message: 'Bank data deleted successfully' });
-    } catch (error) {
-        console.error('❌ Admin user bank delete error:', error);
-        res.status(500).json({ error: 'Failed to delete bank data' });
-    }
-});
-
 // Enhanced Trade Management
 app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) => {
     try {
@@ -1901,7 +1889,7 @@ app.put('/api/admin/trade/:id', authenticateToken, requireAdmin, async (req, res
 });
 
 // ========================================
-// FIXED DEPOSIT MANAGEMENT ROUTES
+// ENHANCED DEPOSIT MANAGEMENT ROUTES dari Dokumen 2
 // ========================================
 
 // Enhanced Deposit Management dengan timeout dan error handling yang lebih baik
@@ -2377,7 +2365,7 @@ app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, asyn
 });
 
 // ========================================
-// SOCKET.IO HANDLING
+// SOCKET.IO HANDLING (tetap sama)
 // ========================================
 
 io.on('connection', (socket) => {
@@ -2460,7 +2448,7 @@ setInterval(() => {
 }, 30000); // Every 30 seconds
 
 // ========================================
-// ERROR HANDLING
+// ERROR HANDLING (menggunakan yang dari Dokumen 2)
 // ========================================
 
 // Enhanced global error handler
@@ -2499,7 +2487,7 @@ app.use('*', (req, res) => {
 });
 
 // ========================================
-// GRACEFUL SHUTDOWN
+// GRACEFUL SHUTDOWN (tetap sama)
 // ========================================
 
 process.on('SIGTERM', () => {
@@ -2521,7 +2509,7 @@ process.on('SIGINT', () => {
 });
 
 // ========================================
-// SERVER START
+// SERVER START (menggunakan yang dari Dokumen 2 dengan monitoring)
 // ========================================
 
 const PORT = process.env.PORT || 3000;
@@ -2637,34 +2625,46 @@ async function startServer() {
         // Start server
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`
-🚀 TradeStation Backend Server Started Successfully!
+🚀 TradeStation Backend Server Started Successfully! - BEST COMBINED VERSION
 📍 Port: ${PORT}
 🌍 Environment: ${process.env.NODE_ENV || 'development'}
-📧 Email/Phone Authentication: ✅ Enabled
-📱 Mobile-First Design: ✅ Supported
+📧 Enhanced Email/Phone Authentication: ✅ (From Dokumen 1 - Best Registration)
+📱 Robust Admin Panel: ✅ (From Dokumen 2 - With Timeouts & Optimization)
+🛡️  Performance for Many Users: ✅ (Database Optimization & Monitoring)
 📊 Real-time Chart Data: ✅ Enhanced
-🛡️  Security & Validation: ✅ Enhanced
 💳 Bank Management: ✅ Enabled
 🎯 Trading Control: ✅ Advanced
 💰 Profit Settings: ✅ Dynamic
-⚙️  Admin Panel: ✅ Complete
+⚙️  Admin Panel: ✅ Complete with Timeouts
 🔄 Background Processes: ✅ Running
-🗃️  Database: ✅ Connected
+🗃️  Database: ✅ Connected with Monitoring
 📡 Socket.IO: ✅ Ready
 ⏰ Timestamp: ${new Date().toISOString()}
 
 🔗 API Endpoints:
    • Health Check: GET /api/health
-   • Authentication: POST /api/login, /api/register
+   • Database Health: GET /api/admin/health/database
+   • Authentication: POST /api/login, /api/register (Enhanced)
    • Trading: POST /api/trade, GET /api/trades
    • Charts: GET /api/chart/:symbol/:timeframe
-   • Admin Panel: /api/admin/*
+   • Admin Panel: /api/admin/* (Enhanced with Timeouts)
 
 📋 Admin Credentials:
    • Email: admin@tradestation.com
    • Password: admin123
 
-🎯 Ready to serve trading requests!
+✨ COMBINED BEST FEATURES:
+   ✅ Enhanced Registration System (Dokumen 1)
+   ✅ Robust Admin Deposit Management (Dokumen 2)
+   ✅ Database Optimization & Monitoring
+   ✅ Memory Usage Tracking
+   ✅ Query Timeout Handling
+   ✅ Better Error Handling for Production
+   ✅ Indonesian Phone Number Validation
+   ✅ Transaction Atomic Operations
+   ✅ Performance Optimization for High Load
+
+🎯 Ready to serve trading requests with optimal performance!
             `);
         });
         
