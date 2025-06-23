@@ -59,11 +59,11 @@ const authLimiter = rateLimit({
 
 // User Schema - ENHANCED
 const userSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    email: { type: String },
-    phone: { type: String },
-    password: { type: String, required: true },
-    balance: { type: Number, default: 0 },
+    name: { type: String, required: true, trim: true, minlength: 2 },
+    email: { type: String, trim: true, lowercase: true, sparse: true },
+    phone: { type: String, trim: true, sparse: true },
+    password: { type: String, required: true, minlength: 6 },
+    balance: { type: Number, default: 0, min: 0 },
     accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
     isActive: { type: Boolean, default: true },
     totalProfit: { type: Number, default: 0 },
@@ -71,21 +71,36 @@ const userSchema = new mongoose.Schema({
     referralCode: { type: String, unique: true },
     // Bank Data untuk Withdrawal
     bankData: {
-        bankName: { type: String },
-        accountNumber: { type: String },
-        accountHolder: { type: String }
+        bankName: { type: String, trim: true },
+        accountNumber: { type: String, trim: true },
+        accountHolder: { type: String, trim: true }
     },
     // Admin Settings untuk User Trading - ENHANCED
     adminSettings: {
         forceWin: { type: Boolean, default: false },
         forceWinRate: { type: Number, default: 0, min: 0, max: 100 },
-        profitCollapse: { type: String, enum: ['profit', 'collapse', 'normal'], default: 'normal' },
-        profitPercentage: { type: Number, default: 80, min: 20, max: 100 }
+        profitCollapse: { 
+            type: String, 
+            enum: ['profit', 'collapse', 'normal'], 
+            default: 'normal' 
+        },
+        profitPercentage: { 
+            type: Number, 
+            default: 80, 
+            min: 20, 
+            max: 100,
+            validate: {
+                validator: function(v) {
+                    return Number.isInteger(v) && v >= 20 && v <= 100;
+                },
+                message: 'Profit percentage must be an integer between 20 and 100'
+            }
+        }
     },
     stats: {
-        totalTrades: { type: Number, default: 0 },
-        winTrades: { type: Number, default: 0 },
-        loseTrades: { type: Number, default: 0 }
+        totalTrades: { type: Number, default: 0, min: 0 },
+        winTrades: { type: Number, default: 0, min: 0 },
+        loseTrades: { type: Number, default: 0, min: 0 }
     },
     lastLoginAt: { type: Date },
     createdAt: { type: Date, default: Date.now }
@@ -94,6 +109,42 @@ const userSchema = new mongoose.Schema({
 // Ensure unique email or phone
 userSchema.index({ email: 1 }, { unique: true, sparse: true });
 userSchema.index({ phone: 1 }, { unique: true, sparse: true });
+
+// Pre-save middleware to ensure adminSettings defaults
+userSchema.pre('save', function(next) {
+    if (!this.adminSettings) {
+        this.adminSettings = {
+            forceWin: false,
+            forceWinRate: 0,
+            profitCollapse: 'normal',
+            profitPercentage: 80
+        };
+    } else {
+        // Ensure all adminSettings have default values
+        if (this.adminSettings.profitPercentage === undefined || this.adminSettings.profitPercentage === null) {
+            this.adminSettings.profitPercentage = 80;
+        }
+        if (this.adminSettings.profitCollapse === undefined || this.adminSettings.profitCollapse === null) {
+            this.adminSettings.profitCollapse = 'normal';
+        }
+        if (this.adminSettings.forceWin === undefined || this.adminSettings.forceWin === null) {
+            this.adminSettings.forceWin = false;
+        }
+        if (this.adminSettings.forceWinRate === undefined || this.adminSettings.forceWinRate === null) {
+            this.adminSettings.forceWinRate = 0;
+        }
+    }
+    
+    if (!this.stats) {
+        this.stats = {
+            totalTrades: 0,
+            winTrades: 0,
+            loseTrades: 0
+        };
+    }
+    
+    next();
+});
 
 // Bank Account Schema untuk Admin Panel
 const bankAccountSchema = new mongoose.Schema({
@@ -1510,30 +1561,74 @@ app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res)
         const { id } = req.params;
         const updateData = req.body;
         
+        console.log('Received update data:', updateData);
+        
         // Enhanced validation
         delete updateData.password; // Don't allow password updates through this endpoint
         
-        // Validate admin settings
+        // Validate basic fields
+        if (updateData.name && updateData.name.trim().length < 2) {
+            return res.status(400).json({ error: 'Name must be at least 2 characters long' });
+        }
+        
+        if (updateData.balance !== undefined) {
+            const balance = parseFloat(updateData.balance);
+            if (isNaN(balance) || balance < 0) {
+                return res.status(400).json({ error: 'Balance must be a valid positive number' });
+            }
+            updateData.balance = balance;
+        }
+        
+        // Validate admin settings with enhanced checks
         if (updateData.adminSettings) {
-            const { profitPercentage, forceWinRate, profitCollapse } = updateData.adminSettings;
+            const { profitPercentage, forceWinRate, profitCollapse, forceWin } = updateData.adminSettings;
             
-            if (profitPercentage && (profitPercentage < 20 || profitPercentage > 100)) {
-                return res.status(400).json({ error: 'Profit percentage must be between 20 and 100' });
+            // Validate profit percentage
+            if (profitPercentage !== undefined) {
+                const percentage = parseInt(profitPercentage);
+                if (isNaN(percentage) || percentage < 20 || percentage > 100) {
+                    return res.status(400).json({ error: 'Profit percentage must be between 20 and 100' });
+                }
+                updateData.adminSettings.profitPercentage = percentage;
             }
             
-            if (forceWinRate && (forceWinRate < 0 || forceWinRate > 100)) {
-                return res.status(400).json({ error: 'Win rate must be between 0 and 100' });
+            // Validate win rate
+            if (forceWinRate !== undefined) {
+                const winRate = parseFloat(forceWinRate);
+                if (isNaN(winRate) || winRate < 0 || winRate > 100) {
+                    return res.status(400).json({ error: 'Win rate must be between 0 and 100' });
+                }
+                updateData.adminSettings.forceWinRate = winRate;
             }
             
+            // Validate profit collapse setting
             if (profitCollapse && !['normal', 'profit', 'collapse'].includes(profitCollapse)) {
                 return res.status(400).json({ error: 'Invalid profit collapse setting' });
             }
+            
+            // Ensure forceWin is boolean
+            if (forceWin !== undefined) {
+                updateData.adminSettings.forceWin = Boolean(forceWin);
+            }
         }
+        
+        // Clean up undefined/empty values
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] === undefined || updateData[key] === '') {
+                delete updateData[key];
+            }
+        });
+        
+        console.log('Processed update data:', updateData);
         
         const user = await User.findByIdAndUpdate(
             id,
             updateData,
-            { new: true, runValidators: true }
+            { 
+                new: true, 
+                runValidators: true,
+                omitUndefined: true 
+            }
         ).select('-password');
         
         if (!user) {
@@ -1548,7 +1643,24 @@ app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res)
         
     } catch (error) {
         console.error('❌ Admin user update error:', error);
-        res.status(500).json({ error: 'Failed to update user' });
+        
+        // Send more specific error messages
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ 
+                error: 'Validation failed', 
+                details: validationErrors 
+            });
+        }
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({ error: 'Invalid data format' });
+        }
+        
+        res.status(500).json({ 
+            error: 'Failed to update user',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
     }
 });
 
@@ -2200,6 +2312,10 @@ async function startServer() {
             });
             await admin.save();
             console.log('✅ Default admin user created (admin@tradestation.com / admin123)');
+            console.log('✅ Admin settings:', admin.adminSettings);
+        } else {
+            console.log('✅ Admin user already exists');
+            console.log('✅ Admin settings:', adminExists.adminSettings);
         }
         
         // Initialize sample bank accounts
