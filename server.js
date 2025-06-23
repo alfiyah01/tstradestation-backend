@@ -751,6 +751,80 @@ function formatCurrency(amount) {
 }
 
 // ========================================
+// DATABASE OPTIMIZATION MIDDLEWARE
+// ========================================
+
+// Add connection monitoring
+mongoose.connection.on('connected', () => {
+    console.log('✅ MongoDB connected successfully');
+});
+
+mongoose.connection.on('error', (err) => {
+    console.error('❌ MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('⚠️ MongoDB disconnected');
+});
+
+// Add memory monitoring
+setInterval(() => {
+    const used = process.memoryUsage();
+    const memoryUsage = {
+        rss: Math.round(used.rss / 1024 / 1024 * 100) / 100,
+        heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100,
+        heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100,
+        external: Math.round(used.external / 1024 / 1024 * 100) / 100
+    };
+    
+    if (memoryUsage.heapUsed > 200) { // Alert if heap > 200MB
+        console.log('⚠️ High memory usage:', memoryUsage);
+    }
+}, 30000); // Check every 30 seconds
+
+// ========================================
+// IMPROVED ERROR HANDLING
+// ========================================
+
+// Global error handler untuk unhandled promises
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Log to file in production
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    // Graceful shutdown
+    process.exit(1);
+});
+
+// ========================================
+// DATABASE INDEX OPTIMIZATION
+// ========================================
+
+// Ensure proper indexes for performance
+async function ensureIndexes() {
+    try {
+        // Deposit indexes
+        await Deposit.collection.createIndex({ status: 1, createdAt: -1 });
+        await Deposit.collection.createIndex({ userId: 1, createdAt: -1 });
+        await Deposit.collection.createIndex({ createdAt: -1 });
+        
+        // User indexes
+        await User.collection.createIndex({ email: 1 }, { sparse: true });
+        await User.collection.createIndex({ phone: 1 }, { sparse: true });
+        
+        // Trade indexes
+        await Trade.collection.createIndex({ userId: 1, status: 1, createdAt: -1 });
+        await Trade.collection.createIndex({ status: 1, createdAt: -1 });
+        
+        console.log('✅ Database indexes ensured');
+    } catch (error) {
+        console.error('❌ Error creating indexes:', error);
+    }
+}
+
+// ========================================
 // PUBLIC ROUTES
 // ========================================
 
@@ -1826,74 +1900,263 @@ app.put('/api/admin/trade/:id', authenticateToken, requireAdmin, async (req, res
     }
 });
 
-// Enhanced Deposit Management
+// ========================================
+// FIXED DEPOSIT MANAGEMENT ROUTES
+// ========================================
+
+// Enhanced Deposit Management dengan timeout dan error handling yang lebih baik
 app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res) => {
+    const startTime = Date.now();
+    
     try {
-        const { status, limit = 100 } = req.query;
+        console.log('📊 Loading admin deposits...');
+        
+        const { status, limit = 50 } = req.query; // Kurangi default limit
+        
+        // Tambahkan timeout untuk query
+        const queryTimeout = 15000; // 15 detik timeout
         
         let query = {};
         if (status && ['pending', 'approved', 'rejected'].includes(status)) {
             query.status = status;
         }
         
-        const deposits = await Deposit.find(query)
-            .populate('userId', 'name email phone')
-            .sort({ createdAt: -1 })
-            .limit(Math.min(parseInt(limit), 200));
+        console.log('🔍 Deposit query:', query);
         
-        res.json({ deposits });
+        // Query dengan timeout dan pagination yang lebih efisien
+        const deposits = await Promise.race([
+            Deposit.find(query)
+                .populate({
+                    path: 'userId',
+                    select: 'name email phone',
+                    options: { 
+                        timeout: queryTimeout / 2,
+                        lean: true // Optimasi memory
+                    }
+                })
+                .sort({ createdAt: -1 })
+                .limit(Math.min(parseInt(limit), 100))
+                .lean() // Optimasi memory
+                .exec(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Query timeout')), queryTimeout)
+            )
+        ]);
+        
+        const endTime = Date.now();
+        console.log(`✅ Deposits loaded: ${deposits.length} records in ${endTime - startTime}ms`);
+        
+        // Filter data yang bermasalah
+        const cleanDeposits = deposits.filter(deposit => {
+            return deposit && deposit._id && deposit.amount;
+        });
+        
+        res.json({ 
+            deposits: cleanDeposits,
+            count: cleanDeposits.length,
+            queryTime: endTime - startTime,
+            status: 'success'
+        });
+        
     } catch (error) {
+        const endTime = Date.now();
         console.error('❌ Admin deposits error:', error);
-        res.status(500).json({ error: 'Failed to load deposits' });
+        console.error('⏱️ Query time before error:', endTime - startTime + 'ms');
+        
+        // Log detail error untuk debugging
+        if (error.message === 'Query timeout') {
+            console.error('🕐 Database query timeout - consider optimizing or increasing timeout');
+        } else if (error.name === 'MongoError') {
+            console.error('🗃️ MongoDB error:', error.message);
+        }
+        
+        // Return error dengan detail untuk debugging (production harus dihapus)
+        res.status(500).json({ 
+            error: 'Failed to load deposits',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Database error',
+            queryTime: endTime - startTime,
+            status: 'error'
+        });
     }
 });
 
+// Tambahkan endpoint untuk check deposit count (untuk debugging)
+app.get('/api/admin/deposits/count', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const totalCount = await Deposit.countDocuments();
+        const pendingCount = await Deposit.countDocuments({ status: 'pending' });
+        const approvedCount = await Deposit.countDocuments({ status: 'approved' });
+        const rejectedCount = await Deposit.countDocuments({ status: 'rejected' });
+        
+        res.json({
+            total: totalCount,
+            pending: pendingCount,
+            approved: approvedCount,
+            rejected: rejectedCount,
+            status: 'success'
+        });
+    } catch (error) {
+        console.error('❌ Deposit count error:', error);
+        res.status(500).json({ error: 'Failed to get deposit count' });
+    }
+});
+
+// Enhanced deposit processing dengan better error handling
 app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const startTime = Date.now();
+    
     try {
         const { id } = req.params;
         const { status, adminNotes } = req.body;
+        
+        console.log(`📝 Processing deposit ${id}:`, { status, adminNotes });
         
         if (!['pending', 'approved', 'rejected'].includes(status)) {
             return res.status(400).json({ error: 'Invalid status' });
         }
         
-        const deposit = await Deposit.findById(id).populate('userId');
-        if (!deposit) {
-            return res.status(404).json({ error: 'Deposit not found' });
-        }
+        // Gunakan session untuk atomic operation
+        const session = await mongoose.startSession();
         
-        if (deposit.status !== 'pending') {
-            return res.status(400).json({ error: 'Deposit already processed' });
-        }
-        
-        deposit.status = status;
-        deposit.adminNotes = adminNotes || '';
-        deposit.processedAt = new Date();
-        
-        // If approved, add to user balance
-        if (status === 'approved') {
-            deposit.userId.balance += deposit.amount;
-            await deposit.userId.save();
+        try {
+            session.startTransaction();
             
-            // Notify user via socket
-            io.to(deposit.userId._id.toString()).emit('depositApproved', {
-                amount: deposit.amount,
-                newBalance: deposit.userId.balance,
-                message: 'Your deposit has been approved!'
+            const deposit = await Deposit.findById(id)
+                .populate('userId')
+                .session(session);
+                
+            if (!deposit) {
+                await session.abortTransaction();
+                return res.status(404).json({ error: 'Deposit not found' });
+            }
+            
+            if (deposit.status !== 'pending') {
+                await session.abortTransaction();
+                return res.status(400).json({ error: 'Deposit already processed' });
+            }
+            
+            // Update deposit
+            deposit.status = status;
+            deposit.adminNotes = adminNotes || '';
+            deposit.processedAt = new Date();
+            
+            // If approved, add to user balance
+            if (status === 'approved') {
+                if (!deposit.userId) {
+                    await session.abortTransaction();
+                    return res.status(400).json({ error: 'User not found for this deposit' });
+                }
+                
+                deposit.userId.balance += deposit.amount;
+                await deposit.userId.save({ session });
+                
+                console.log(`💰 Added ${deposit.amount} to user ${deposit.userId.name} balance`);
+                
+                // Notify via socket
+                setTimeout(() => {
+                    try {
+                        io.to(deposit.userId._id.toString()).emit('depositApproved', {
+                            amount: deposit.amount,
+                            newBalance: deposit.userId.balance,
+                            message: 'Your deposit has been approved!'
+                        });
+                    } catch (socketError) {
+                        console.error('❌ Socket notification error:', socketError);
+                    }
+                }, 100);
+            }
+            
+            await deposit.save({ session });
+            await session.commitTransaction();
+            
+            // Enhanced activity logging
+            await logActivity(
+                req.userId, 
+                'ADMIN_DEPOSIT_PROCESS', 
+                `${status.toUpperCase()} deposit: ${formatCurrency(deposit.amount)} for ${deposit.userId.name}`,
+                req
+            );
+            
+            const endTime = Date.now();
+            console.log(`✅ Deposit ${status} successfully in ${endTime - startTime}ms`);
+            
+            res.json({ 
+                message: `Deposit ${status} successfully`,
+                deposit: {
+                    _id: deposit._id,
+                    status: deposit.status,
+                    processedAt: deposit.processedAt
+                },
+                queryTime: endTime - startTime,
+                status: 'success'
             });
+            
+        } catch (transactionError) {
+            await session.abortTransaction();
+            throw transactionError;
+        } finally {
+            session.endSession();
         }
-        
-        await deposit.save();
-        
-        await logActivity(req.userId, 'ADMIN_DEPOSIT_PROCESS', `${status.toUpperCase()} deposit: ${formatCurrency(deposit.amount)} for ${deposit.userId.name}`, req);
-        
-        res.json({ message: `Deposit ${status} successfully` });
-        
-        console.log(`✅ Deposit ${status} by admin: ${formatCurrency(deposit.amount)} for ${deposit.userId.name}`);
         
     } catch (error) {
+        const endTime = Date.now();
         console.error('❌ Admin deposit process error:', error);
-        res.status(500).json({ error: 'Failed to process deposit' });
+        console.error('⏱️ Process time before error:', endTime - startTime + 'ms');
+        
+        res.status(500).json({ 
+            error: 'Failed to process deposit',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Processing error',
+            queryTime: endTime - startTime,
+            status: 'error'
+        });
+    }
+});
+
+// Add database health check endpoint
+app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const startTime = Date.now();
+        
+        // Test basic queries
+        const [userCount, depositCount, tradeCount] = await Promise.all([
+            User.countDocuments().maxTimeMS(5000),
+            Deposit.countDocuments().maxTimeMS(5000),
+            Trade.countDocuments().maxTimeMS(5000)
+        ]);
+        
+        const endTime = Date.now();
+        const queryTime = endTime - startTime;
+        
+        const health = {
+            status: 'healthy',
+            queryTime: queryTime,
+            collections: {
+                users: userCount,
+                deposits: depositCount,
+                trades: tradeCount
+            },
+            mongodb: {
+                readyState: mongoose.connection.readyState,
+                host: mongoose.connection.host,
+                name: mongoose.connection.name
+            }
+        };
+        
+        if (queryTime > 3000) {
+            health.warning = 'Slow database response';
+        }
+        
+        res.json(health);
+        
+    } catch (error) {
+        console.error('❌ Database health check failed:', error);
+        res.status(500).json({
+            status: 'unhealthy',
+            error: error.message,
+            mongodb: {
+                readyState: mongoose.connection.readyState
+            }
+        });
     }
 });
 
@@ -2257,15 +2520,6 @@ process.on('SIGINT', () => {
     });
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    process.exit(1);
-});
-
 // ========================================
 // SERVER START
 // ========================================
@@ -2286,6 +2540,13 @@ async function startServer() {
         });
         
         console.log('✅ Connected to MongoDB');
+        
+        // Call after database connection
+        if (mongoose.connection.readyState === 1) {
+            ensureIndexes();
+        } else {
+            mongoose.connection.once('connected', ensureIndexes);
+        }
         
         // Initialize default admin user
         const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
