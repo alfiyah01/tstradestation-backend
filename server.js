@@ -14,7 +14,7 @@ const compression = require('compression');
 const morgan = require('morgan');
 
 // ====================================
-// APP INITIALIZATION
+// 🔧 KONFIGURASI DASAR - DIPERBAIKI
 // ====================================
 const app = express();
 const server = http.createServer(app);
@@ -27,7 +27,14 @@ const io = socketIo(server, {
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'tradestation_super_secret_key_2024_very_secure';
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://tradestation:Yusrizal1993@clustertrading.7joz32u.mongodb.net/tradestation?retryWrites=true&w=majority&appName=Clustertrading';
+
+// 🔧 MONGODB CONNECTION - DIPERBAIKI
+// Gunakan MongoDB lokal atau connection string yang valid
+const MONGODB_URI = process.env.MONGODB_URI || 
+    'mongodb://localhost:27017/tradestation' || // Local MongoDB
+    'mongodb+srv://admin:admin123@cluster0.mongodb.net/tradestation?retryWrites=true&w=majority'; // Atlas fallback
+
+console.log('🔄 Connecting to MongoDB:', MONGODB_URI.includes('localhost') ? 'Local MongoDB' : 'MongoDB Atlas');
 
 // ====================================
 // MIDDLEWARE SETUP
@@ -103,12 +110,37 @@ const upload = multer({
 });
 
 // ====================================
-// DATABASE SCHEMAS
+// 🔧 DATABASE SCHEMAS - DIPERBAIKI
 // ====================================
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true },
-    email: { type: String, sparse: true, lowercase: true, trim: true },
-    phone: { type: String, sparse: true, trim: true },
+    email: { 
+        type: String, 
+        sparse: true, 
+        lowercase: true, 
+        trim: true,
+        validate: {
+            validator: function(v) {
+                // Email harus valid jika disediakan
+                if (!v) return true; // Allow empty
+                return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+            },
+            message: 'Email tidak valid'
+        }
+    },
+    phone: { 
+        type: String, 
+        sparse: true, 
+        trim: true,
+        validate: {
+            validator: function(v) {
+                // Phone harus valid jika disediakan
+                if (!v) return true; // Allow empty
+                return /^[\+]?[\d\s\-\(\)]{10,15}$/.test(v);
+            },
+            message: 'Nomor HP tidak valid'
+        }
+    },
     password: { type: String, required: true },
     balance: { type: Number, default: 0 },
     totalProfit: { type: Number, default: 0 },
@@ -139,6 +171,14 @@ const userSchema = new mongoose.Schema({
             return ret;
         }
     }
+});
+
+// Custom validation - setidaknya email atau phone harus ada
+userSchema.pre('save', function(next) {
+    if (!this.email && !this.phone) {
+        return next(new Error('Email atau nomor HP harus diisi'));
+    }
+    next();
 });
 
 const tradeSchema = new mongoose.Schema({
@@ -203,7 +243,7 @@ const activitySchema = new mongoose.Schema({
     userAgent: { type: String }
 }, { timestamps: true });
 
-// Create indexes
+// Create indexes - IMPROVED
 userSchema.index({ email: 1 }, { unique: true, sparse: true });
 userSchema.index({ phone: 1 }, { unique: true, sparse: true });
 tradeSchema.index({ userId: 1, createdAt: -1 });
@@ -219,15 +259,30 @@ const BankAccount = mongoose.model('BankAccount', bankAccountSchema);
 const Activity = mongoose.model('Activity', activitySchema);
 
 // ====================================
-// DATABASE CONNECTION
+// 🔧 DATABASE CONNECTION - DIPERBAIKI
 // ====================================
 async function connectDB() {
     try {
-        await mongoose.connect(MONGODB_URI, {
+        // Improved connection options
+        const connectionOptions = {
             useNewUrlParser: true,
             useUnifiedTopology: true,
-        });
+            maxPoolSize: 10, // Maintain up to 10 socket connections
+            serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
+            socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+            bufferMaxEntries: 0, // Disable mongoose buffering
+            bufferCommands: false, // Disable mongoose buffering
+        };
+
+        console.log('🔄 Attempting MongoDB connection...');
+        await mongoose.connect(MONGODB_URI, connectionOptions);
         console.log('✅ MongoDB connected successfully');
+        
+        // Test the connection
+        const testResult = await mongoose.connection.db.admin().ping();
+        if (testResult.ok === 1) {
+            console.log('✅ MongoDB ping test successful');
+        }
         
         // Create default admin user
         await createDefaultAdmin();
@@ -236,10 +291,26 @@ async function connectDB() {
         await createDefaultBankAccounts();
         
     } catch (error) {
-        console.error('❌ MongoDB connection failed:', error);
-        process.exit(1);
+        console.error('❌ MongoDB connection failed:', error.message);
+        console.log('🔄 Retrying connection in 5 seconds...');
+        
+        // Retry connection after 5 seconds
+        setTimeout(connectDB, 5000);
     }
 }
+
+// Handle MongoDB connection events
+mongoose.connection.on('connected', () => {
+    console.log('✅ Mongoose connected to MongoDB');
+});
+
+mongoose.connection.on('error', (err) => {
+    console.error('❌ Mongoose connection error:', err.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('❌ Mongoose disconnected');
+});
 
 async function createDefaultAdmin() {
     try {
@@ -255,9 +326,13 @@ async function createDefaultAdmin() {
             });
             await admin.save();
             console.log('✅ Default admin user created');
+            console.log('📧 Admin login: admin@tradestation.com');
+            console.log('🔑 Admin password: admin123456');
+        } else {
+            console.log('✅ Admin user already exists');
         }
     } catch (error) {
-        console.error('❌ Error creating admin user:', error);
+        console.error('❌ Error creating admin user:', error.message);
     }
 }
 
@@ -286,7 +361,7 @@ async function createDefaultBankAccounts() {
             console.log('✅ Default bank accounts created');
         }
     } catch (error) {
-        console.error('❌ Error creating bank accounts:', error);
+        console.error('❌ Error creating bank accounts:', error.message);
     }
 }
 
@@ -312,7 +387,7 @@ const authenticateToken = async (req, res, next) => {
         req.user = user;
         next();
     } catch (error) {
-        console.error('❌ Auth error:', error);
+        console.error('❌ Auth error:', error.message);
         return res.status(401).json({ error: 'Token tidak valid' });
     }
 };
@@ -324,7 +399,7 @@ const requireAdmin = async (req, res, next) => {
         }
         next();
     } catch (error) {
-        console.error('❌ Admin auth error:', error);
+        console.error('❌ Admin auth error:', error.message);
         return res.status(403).json({ error: 'Akses admin diperlukan' });
     }
 };
@@ -340,7 +415,7 @@ const logActivity = async (userId, action, details, req) => {
         });
         await activity.save();
     } catch (error) {
-        console.error('❌ Error logging activity:', error);
+        console.error('❌ Error logging activity:', error.message);
     }
 };
 
@@ -375,27 +450,58 @@ setInterval(updateCryptoPrices, 5000);
 // BASIC ROUTES
 // ====================================
 
-// Health check
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        environment: process.env.NODE_ENV || 'development'
-    });
+// Health check - IMPROVED
+app.get('/api/health', async (req, res) => {
+    try {
+        // Test database connection
+        const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+        
+        res.json({ 
+            status: 'OK', 
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            environment: process.env.NODE_ENV || 'development',
+            database: {
+                status: dbStatus,
+                host: mongoose.connection.host,
+                name: mongoose.connection.name
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            status: 'ERROR',
+            error: error.message
+        });
+    }
 });
 
 // Serve uploaded files
 app.use('/uploads', express.static('uploads'));
 
 // ====================================
-// AUTHENTICATION ROUTES
+// 🔧 AUTHENTICATION ROUTES - DIPERBAIKI
 // ====================================
 
-// Register
+// Utility function untuk validasi email dan phone
+function validateContact(contact) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneRegex = /^[\+]?[\d\s\-\(\)]{10,15}$/;
+    
+    // Clean phone number (remove spaces, dashes, parentheses)
+    const cleanPhone = contact.replace(/[\s\-\(\)]/g, '');
+    
+    const isEmail = emailRegex.test(contact);
+    const isPhone = phoneRegex.test(contact) && cleanPhone.length >= 10;
+    
+    return { isEmail, isPhone, cleanPhone };
+}
+
+// Register - FIXED
 app.post('/api/register', async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
+
+        console.log('📝 Registration attempt:', { name, email, phone, hasPassword: !!password });
 
         // Validation
         if (!name || name.length < 2) {
@@ -406,17 +512,45 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'Password minimal 6 karakter' });
         }
 
-        if (!email && !phone) {
+        // Check if we have either email or phone
+        let finalEmail = null;
+        let finalPhone = null;
+
+        if (email) {
+            const { isEmail } = validateContact(email);
+            if (!isEmail) {
+                return res.status(400).json({ error: 'Format email tidak valid' });
+            }
+            finalEmail = email.toLowerCase().trim();
+        }
+
+        if (phone) {
+            const { isPhone, cleanPhone } = validateContact(phone);
+            if (!isPhone) {
+                return res.status(400).json({ error: 'Format nomor HP tidak valid' });
+            }
+            
+            // Standardize phone format
+            let standardPhone = cleanPhone;
+            if (standardPhone.startsWith('08')) {
+                standardPhone = '+62' + standardPhone.substring(1);
+            } else if (standardPhone.startsWith('62') && !standardPhone.startsWith('+')) {
+                standardPhone = '+' + standardPhone;
+            }
+            finalPhone = standardPhone;
+        }
+
+        // Must have at least email or phone
+        if (!finalEmail && !finalPhone) {
             return res.status(400).json({ error: 'Email atau nomor HP harus diisi' });
         }
 
         // Check if user exists
-        const existingUser = await User.findOne({
-            $or: [
-                { email: email || null },
-                { phone: phone || null }
-            ]
-        });
+        const existingQuery = [];
+        if (finalEmail) existingQuery.push({ email: finalEmail });
+        if (finalPhone) existingQuery.push({ phone: finalPhone });
+
+        const existingUser = await User.findOne({ $or: existingQuery });
 
         if (existingUser) {
             return res.status(400).json({ error: 'Email atau nomor HP sudah terdaftar' });
@@ -434,12 +568,10 @@ app.post('/api/register', async (req, res) => {
             totalLoss: 0
         };
 
-        if (email) {
-            userData.email = email.toLowerCase().trim();
-        }
-        if (phone) {
-            userData.phone = phone.trim();
-        }
+        if (finalEmail) userData.email = finalEmail;
+        if (finalPhone) userData.phone = finalPhone;
+
+        console.log('💾 Creating user:', { ...userData, password: '[HIDDEN]' });
 
         const user = new User(userData);
         await user.save();
@@ -450,6 +582,8 @@ app.post('/api/register', async (req, res) => {
         // Log activity
         await logActivity(user._id, 'Registrasi', 'User berhasil registrasi', req);
 
+        console.log('✅ Registration successful for:', user.name);
+
         const userResponse = user.toJSON();
         res.status(201).json({
             message: 'Registrasi berhasil',
@@ -458,18 +592,28 @@ app.post('/api/register', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Register error:', error);
+        console.error('❌ Register error:', error.message);
+        
         if (error.code === 11000) {
-            return res.status(400).json({ error: 'Email atau nomor HP sudah terdaftar' });
+            // Duplicate key error
+            const field = error.message.includes('email') ? 'Email' : 'Nomor HP';
+            return res.status(400).json({ error: `${field} sudah terdaftar` });
         }
+        
+        if (error.message.includes('validation')) {
+            return res.status(400).json({ error: error.message });
+        }
+        
         res.status(500).json({ error: 'Terjadi kesalahan server' });
     }
 });
 
-// Login
+// Login - FIXED
 app.post('/api/login', async (req, res) => {
     try {
         const { email, phone, password } = req.body;
+
+        console.log('🔐 Login attempt:', { email, phone, hasPassword: !!password });
 
         if (!password) {
             return res.status(400).json({ error: 'Password harus diisi' });
@@ -479,19 +623,60 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ error: 'Email atau nomor HP harus diisi' });
         }
 
-        // Find user
-        const query = {};
-        if (email) query.email = email.toLowerCase().trim();
-        if (phone) query.phone = phone.trim();
+        // Determine what we're searching for
+        let searchQuery = [];
+        
+        if (email) {
+            const { isEmail } = validateContact(email);
+            if (isEmail) {
+                searchQuery.push({ email: email.toLowerCase().trim() });
+            }
+        }
+        
+        if (phone) {
+            const { isPhone, cleanPhone } = validateContact(phone);
+            if (isPhone) {
+                // Try multiple phone formats
+                let standardPhone = cleanPhone;
+                if (standardPhone.startsWith('08')) {
+                    standardPhone = '+62' + standardPhone.substring(1);
+                } else if (standardPhone.startsWith('62') && !standardPhone.startsWith('+')) {
+                    standardPhone = '+' + standardPhone;
+                }
+                
+                searchQuery.push({ phone: standardPhone });
+                searchQuery.push({ phone: cleanPhone });
+                searchQuery.push({ phone: phone.trim() });
+            }
+        }
 
-        const user = await User.findOne({
-            $or: [
-                { email: query.email || null },
-                { phone: query.phone || null }
-            ]
-        });
+        // If input could be either email or phone, try both
+        const inputValue = email || phone;
+        const { isEmail, isPhone, cleanPhone } = validateContact(inputValue);
+        
+        if (isEmail) {
+            searchQuery.push({ email: inputValue.toLowerCase().trim() });
+        }
+        
+        if (isPhone) {
+            let standardPhone = cleanPhone;
+            if (standardPhone.startsWith('08')) {
+                standardPhone = '+62' + standardPhone.substring(1);
+            } else if (standardPhone.startsWith('62') && !standardPhone.startsWith('+')) {
+                standardPhone = '+' + standardPhone;
+            }
+            
+            searchQuery.push({ phone: standardPhone });
+            searchQuery.push({ phone: cleanPhone });
+            searchQuery.push({ phone: inputValue.trim() });
+        }
+
+        console.log('🔍 Search query:', searchQuery);
+
+        const user = await User.findOne({ $or: searchQuery });
 
         if (!user) {
+            console.log('❌ User not found');
             return res.status(400).json({ error: 'Email/nomor HP atau password salah' });
         }
 
@@ -502,6 +687,7 @@ app.post('/api/login', async (req, res) => {
         // Check password
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
+            console.log('❌ Invalid password for user:', user.name);
             return res.status(400).json({ error: 'Email/nomor HP atau password salah' });
         }
 
@@ -511,6 +697,8 @@ app.post('/api/login', async (req, res) => {
         // Log activity
         await logActivity(user._id, 'Login', 'User berhasil login', req);
 
+        console.log('✅ Login successful for:', user.name);
+
         const userResponse = user.toJSON();
         res.json({
             message: 'Login berhasil',
@@ -519,7 +707,7 @@ app.post('/api/login', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Login error:', error);
+        console.error('❌ Login error:', error.message);
         res.status(500).json({ error: 'Terjadi kesalahan server' });
     }
 });
@@ -534,7 +722,7 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
         const user = await User.findById(req.user._id);
         res.json(user.toJSON());
     } catch (error) {
-        console.error('❌ Profile error:', error);
+        console.error('❌ Profile error:', error.message);
         res.status(500).json({ error: 'Gagal memuat profil' });
     }
 });
@@ -567,7 +755,7 @@ app.put('/api/user/bank-data', authenticateToken, async (req, res) => {
             bankData: user.bankData
         });
     } catch (error) {
-        console.error('❌ Bank data update error:', error);
+        console.error('❌ Bank data update error:', error.message);
         res.status(500).json({ error: 'Gagal mengupdate data bank' });
     }
 });
@@ -581,7 +769,7 @@ app.get('/api/prices', authenticateToken, (req, res) => {
         }));
         res.json(prices);
     } catch (error) {
-        console.error('❌ Prices error:', error);
+        console.error('❌ Prices error:', error.message);
         res.status(500).json({ error: 'Gagal memuat harga crypto' });
     }
 });
@@ -645,7 +833,7 @@ app.post('/api/trade', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Trade creation error:', error);
+        console.error('❌ Trade creation error:', error.message);
         res.status(500).json({ error: 'Gagal membuat trade' });
     }
 });
@@ -731,7 +919,7 @@ async function completeTrade(tradeId) {
         console.log(`✅ Trade completed: ${trade.symbol} ${result} - User: ${user.name}`);
 
     } catch (error) {
-        console.error('❌ Complete trade error:', error);
+        console.error('❌ Complete trade error:', error.message);
     }
 }
 
@@ -745,7 +933,7 @@ app.get('/api/trades/active', authenticateToken, async (req, res) => {
 
         res.json({ trades });
     } catch (error) {
-        console.error('❌ Active trades error:', error);
+        console.error('❌ Active trades error:', error.message);
         res.status(500).json({ error: 'Gagal memuat trade aktif' });
     }
 });
@@ -760,7 +948,7 @@ app.get('/api/trades/recent', authenticateToken, async (req, res) => {
 
         res.json({ trades });
     } catch (error) {
-        console.error('❌ Recent trades error:', error);
+        console.error('❌ Recent trades error:', error.message);
         res.status(500).json({ error: 'Gagal memuat riwayat trade' });
     }
 });
@@ -788,7 +976,7 @@ app.get('/api/trades/history', authenticateToken, async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Trading history error:', error);
+        console.error('❌ Trading history error:', error.message);
         res.status(500).json({ error: 'Gagal memuat riwayat trading' });
     }
 });
@@ -803,7 +991,7 @@ app.get('/api/bank-accounts', authenticateToken, async (req, res) => {
         const bankAccounts = await BankAccount.find({ isActive: true });
         res.json({ accounts: bankAccounts });
     } catch (error) {
-        console.error('❌ Bank accounts error:', error);
+        console.error('❌ Bank accounts error:', error.message);
         res.status(500).json({ error: 'Gagal memuat rekening bank' });
     }
 });
@@ -839,7 +1027,7 @@ app.post('/api/deposit', authenticateToken, upload.single('receipt'), async (req
         });
 
     } catch (error) {
-        console.error('❌ Deposit error:', error);
+        console.error('❌ Deposit error:', error.message);
         res.status(500).json({ error: 'Gagal memproses deposit' });
     }
 });
@@ -853,7 +1041,7 @@ app.get('/api/deposits/history', authenticateToken, async (req, res) => {
 
         res.json({ deposits });
     } catch (error) {
-        console.error('❌ Deposit history error:', error);
+        console.error('❌ Deposit history error:', error.message);
         res.status(500).json({ error: 'Gagal memuat riwayat deposit' });
     }
 });
@@ -908,7 +1096,7 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Withdrawal error:', error);
+        console.error('❌ Withdrawal error:', error.message);
         res.status(500).json({ error: 'Gagal memproses penarikan' });
     }
 });
@@ -922,7 +1110,7 @@ app.get('/api/withdrawals/history', authenticateToken, async (req, res) => {
 
         res.json({ withdrawals });
     } catch (error) {
-        console.error('❌ Withdrawal history error:', error);
+        console.error('❌ Withdrawal history error:', error.message);
         res.status(500).json({ error: 'Gagal memuat riwayat penarikan' });
     }
 });
@@ -979,7 +1167,7 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
 
         res.json({ stats, recentActivities });
     } catch (error) {
-        console.error('❌ Admin dashboard error:', error);
+        console.error('❌ Admin dashboard error:', error.message);
         res.status(500).json({ error: 'Gagal memuat dashboard' });
     }
 });
@@ -993,7 +1181,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
 
         res.json({ users });
     } catch (error) {
-        console.error('❌ Admin users error:', error);
+        console.error('❌ Admin users error:', error.message);
         res.status(500).json({ error: 'Gagal memuat daftar user' });
     }
 });
@@ -1016,7 +1204,7 @@ app.put('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, 
 
         res.json({ message: 'User berhasil diupdate', user });
     } catch (error) {
-        console.error('❌ Admin update user error:', error);
+        console.error('❌ Admin update user error:', error.message);
         res.status(500).json({ error: 'Gagal mengupdate user' });
     }
 });
@@ -1038,7 +1226,7 @@ app.put('/api/admin/user/:userId/password', authenticateToken, requireAdmin, asy
 
         res.json({ message: 'Password berhasil diubah' });
     } catch (error) {
-        console.error('❌ Admin change password error:', error);
+        console.error('❌ Admin change password error:', error.message);
         res.status(500).json({ error: 'Gagal mengubah password' });
     }
 });
@@ -1049,7 +1237,7 @@ app.get('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (
         const user = await User.findById(req.params.userId);
         res.json({ bankData: user.bankData || {} });
     } catch (error) {
-        console.error('❌ Admin user bank error:', error);
+        console.error('❌ Admin user bank error:', error.message);
         res.status(500).json({ error: 'Gagal memuat data bank' });
     }
 });
@@ -1068,7 +1256,7 @@ app.put('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, async (
 
         res.json({ message: 'Data bank berhasil diupdate' });
     } catch (error) {
-        console.error('❌ Admin update user bank error:', error);
+        console.error('❌ Admin update user bank error:', error.message);
         res.status(500).json({ error: 'Gagal mengupdate data bank' });
     }
 });
@@ -1086,7 +1274,7 @@ app.delete('/api/admin/user/:userId/bank', authenticateToken, requireAdmin, asyn
 
         res.json({ message: 'Data bank berhasil dihapus' });
     } catch (error) {
-        console.error('❌ Admin delete user bank error:', error);
+        console.error('❌ Admin delete user bank error:', error.message);
         res.status(500).json({ error: 'Gagal menghapus data bank' });
     }
 });
@@ -1105,7 +1293,7 @@ app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) =
 
         res.json({ trades });
     } catch (error) {
-        console.error('❌ Admin trades error:', error);
+        console.error('❌ Admin trades error:', error.message);
         res.status(500).json({ error: 'Gagal memuat trades' });
     }
 });
@@ -1122,7 +1310,7 @@ app.put('/api/admin/trade/:tradeId', authenticateToken, requireAdmin, async (req
 
         res.json({ message: 'Trade control berhasil diupdate' });
     } catch (error) {
-        console.error('❌ Admin control trade error:', error);
+        console.error('❌ Admin control trade error:', error.message);
         res.status(500).json({ error: 'Gagal mengupdate trade control' });
     }
 });
@@ -1149,7 +1337,7 @@ app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res)
             count: deposits.length
         });
     } catch (error) {
-        console.error('❌ Admin deposits error:', error);
+        console.error('❌ Admin deposits error:', error.message);
         res.status(500).json({ error: 'Gagal memuat deposits' });
     }
 });
@@ -1183,7 +1371,7 @@ app.put('/api/admin/deposit/:depositId', authenticateToken, requireAdmin, async 
 
         res.json({ message: `Deposit ${status}`, deposit });
     } catch (error) {
-        console.error('❌ Admin process deposit error:', error);
+        console.error('❌ Admin process deposit error:', error.message);
         res.status(500).json({ error: 'Gagal memproses deposit' });
     }
 });
@@ -1202,7 +1390,7 @@ app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, r
 
         res.json({ withdrawals });
     } catch (error) {
-        console.error('❌ Admin withdrawals error:', error);
+        console.error('❌ Admin withdrawals error:', error.message);
         res.status(500).json({ error: 'Gagal memuat withdrawals' });
     }
 });
@@ -1231,7 +1419,7 @@ app.put('/api/admin/withdrawal/:withdrawalId', authenticateToken, requireAdmin, 
 
         res.json({ message: `Withdrawal ${status}`, withdrawal });
     } catch (error) {
-        console.error('❌ Admin process withdrawal error:', error);
+        console.error('❌ Admin process withdrawal error:', error.message);
         res.status(500).json({ error: 'Gagal memproses withdrawal' });
     }
 });
@@ -1242,7 +1430,7 @@ app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req,
         const accounts = await BankAccount.find().sort({ createdAt: -1 });
         res.json({ accounts });
     } catch (error) {
-        console.error('❌ Admin bank accounts error:', error);
+        console.error('❌ Admin bank accounts error:', error.message);
         res.status(500).json({ error: 'Gagal memuat bank accounts' });
     }
 });
@@ -1256,7 +1444,7 @@ app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req
 
         res.json({ message: 'Bank account created', account });
     } catch (error) {
-        console.error('❌ Admin create bank account error:', error);
+        console.error('❌ Admin create bank account error:', error.message);
         res.status(500).json({ error: 'Gagal membuat bank account' });
     }
 });
@@ -1269,7 +1457,7 @@ app.put('/api/admin/bank-accounts/:accountId', authenticateToken, requireAdmin, 
 
         res.json({ message: 'Bank account updated', account });
     } catch (error) {
-        console.error('❌ Admin update bank account error:', error);
+        console.error('❌ Admin update bank account error:', error.message);
         res.status(500).json({ error: 'Gagal mengupdate bank account' });
     }
 });
@@ -1287,7 +1475,7 @@ app.patch('/api/admin/bank-accounts/:accountId/toggle', authenticateToken, requi
             account 
         });
     } catch (error) {
-        console.error('❌ Admin toggle bank account error:', error);
+        console.error('❌ Admin toggle bank account error:', error.message);
         res.status(500).json({ error: 'Gagal toggle bank account' });
     }
 });
@@ -1300,7 +1488,7 @@ app.delete('/api/admin/bank-accounts/:accountId', authenticateToken, requireAdmi
 
         res.json({ message: 'Bank account deleted' });
     } catch (error) {
-        console.error('❌ Admin delete bank account error:', error);
+        console.error('❌ Admin delete bank account error:', error.message);
         res.status(500).json({ error: 'Gagal menghapus bank account' });
     }
 });
@@ -1333,7 +1521,7 @@ app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (re
             }
         });
     } catch (error) {
-        console.error('❌ Database health check error:', error);
+        console.error('❌ Database health check error:', error.message);
         res.status(500).json({ 
             status: 'unhealthy',
             error: error.message 
@@ -1382,7 +1570,7 @@ app.use('*', (req, res) => {
 
 // Global error handler
 app.use((error, req, res, next) => {
-    console.error('❌ Global error:', error);
+    console.error('❌ Global error:', error.message);
     
     if (error instanceof multer.MulterError) {
         if (error.code === 'LIMIT_FILE_SIZE') {
@@ -1411,7 +1599,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
+    console.error('❌ Uncaught Exception:', error.message);
     process.exit(1);
 });
 
@@ -1420,11 +1608,14 @@ process.on('uncaughtException', (error) => {
 // ====================================
 async function startServer() {
     try {
+        console.log('🚀 Starting TradeStation Server...');
+        
+        // Connect to database first
         await connectDB();
         
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`
-🚀 TradeStation Server Started Successfully!
+✅ TradeStation Server Started Successfully!
 📍 Port: ${PORT}
 🔒 Environment: ${process.env.NODE_ENV || 'development'}
 🌍 CORS: Enabled for all origins
@@ -1432,23 +1623,27 @@ async function startServer() {
 📁 File Upload: Enabled (5MB limit)
 🛡️  Security: Helmet enabled
 ⚡ Rate Limiting: Enabled
-📊 MongoDB: Connected
+📊 MongoDB: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Connecting...'}
+
+📋 Admin Access:
+   Email: admin@tradestation.com
+   Password: admin123456
+
+📋 Available Routes:
+   🔐 POST /api/register - User registration
+   🔐 POST /api/login - User login
+   👤 GET /api/profile - Get user profile
+   💰 GET /api/prices - Get crypto prices
+   📈 POST /api/trade - Create trade
+   💳 POST /api/deposit - Create deposit
+   💸 POST /api/withdrawal - Create withdrawal
+   🏦 GET /api/bank-accounts - Get bank accounts
+   🔧 GET /api/admin/* - Admin routes
+   ❤️  GET /api/health - Health check
             `);
-            
-            console.log('📋 Available Routes:');
-            console.log('   🔐 POST /api/register - User registration');
-            console.log('   🔐 POST /api/login - User login');
-            console.log('   👤 GET /api/profile - Get user profile');
-            console.log('   💰 GET /api/prices - Get crypto prices');
-            console.log('   📈 POST /api/trade - Create trade');
-            console.log('   💳 POST /api/deposit - Create deposit');
-            console.log('   💸 POST /api/withdrawal - Create withdrawal');
-            console.log('   🏦 GET /api/bank-accounts - Get bank accounts');
-            console.log('   🔧 GET /api/admin/* - Admin routes');
-            console.log('   ❤️  GET /api/health - Health check');
         });
     } catch (error) {
-        console.error('❌ Failed to start server:', error);
+        console.error('❌ Failed to start server:', error.message);
         process.exit(1);
     }
 }
