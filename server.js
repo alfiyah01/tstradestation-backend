@@ -1,4095 +1,2680 @@
-// ========================================
-// 🚀 GOSOK ANGKA BACKEND - RAILWAY v7.6 PHONE ONLY + ONLINE TRACKING
-// ✅ ALL FEATURES + QRIS PAYMENT SYSTEM + COMPLETE ADMIN PANEL + PHONE ONLY REGISTRATION
-// 🔗 Backend URL: gosokangka-backend-production-e9fa.up.railway.app
-// 📊 DATABASE: MongoDB Atlas (gosokangka-db) - Complete Schema
-// 🎯 100% PRODUCTION READY dengan SEMUA FITUR + ADMIN PANEL ENDPOINTS
-// 🔧 FIXED CORS CONFIGURATION untuk Perfect Connection
-// 🏢 COMPLETE ADMIN PANEL ENDPOINTS - ALL FUNCTIONAL
-// 📱 PHONE ONLY REGISTRATION - No Email Required
-// 👥 REALTIME ONLINE USERS TRACKING
-// ========================================
-
-require('dotenv').config();
-
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const http = require('http');
-const socketIO = require('socket.io');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
-const mongoSanitize = require('express-mongo-sanitize');
-const { body, validationResult } = require('express-validator');
-const winston = require('winston');
-const morgan = require('morgan');
-const compression = require('compression');
-const multer = require('multer');
-
-// 🔧 Enhanced node-cron handling untuk Railway
-let cron;
-try {
-    cron = require('node-cron');
-    console.log('✅ node-cron loaded successfully');
-} catch (error) {
-    console.warn('⚠️ node-cron not available, background jobs disabled (normal for Railway)');
-}
+const http = require('http');
+const socketIo = require('socket.io');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 
-// ========================================
-// 🚨 RAILWAY DEPLOYMENT FIXES - Critical
-// ========================================
-
-// Environment validation with Railway optimization
-function validateEnvironment() {
-    console.log('🔧 Railway Environment Validation...');
-    
-    if (!process.env.JWT_SECRET) {
-        process.env.JWT_SECRET = 'gosokangka_ultra_secure_secret_key_2024_production_ready';
-        console.log('✅ JWT_SECRET set for Railway');
-    }
-    
-    if (!process.env.MONGODB_URI) {
-        console.error('❌ MONGODB_URI environment variable is required');
-        process.exit(1);
-    }
-    
-    process.env.NODE_ENV = process.env.NODE_ENV || 'production';
-    console.log('✅ Railway environment configured successfully');
-}
-
-validateEnvironment();
-
-// ========================================
-// 🛡️ ENHANCED SECURITY - Railway Production
-// ========================================
-
-const logger = winston.createLogger({
-    level: 'info',
-    format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-    ),
-    transports: [new winston.transports.Console()]
+// Socket.IO setup dengan CORS
+const io = socketIo(server, {
+    cors: {
+        origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling']
 });
 
-// Railway-optimized rate limiting
-const createRateLimit = (windowMs, max, message) => {
-    return rateLimit({
-        windowMs,
-        max,
-        message: { error: message },
-        standardHeaders: true,
-        legacyHeaders: false,
-        skip: (req) => {
-            return req.path === '/health' || req.path === '/api/health';
-        }
-    });
-};
-
-const generalRateLimit = createRateLimit(15 * 60 * 1000, 2000, 'Too many requests');
-const authRateLimit = createRateLimit(15 * 60 * 1000, 50, 'Too many auth attempts');
-const adminRateLimit = createRateLimit(5 * 60 * 1000, 500, 'Too many admin operations');
-const qrisRateLimit = createRateLimit(5 * 60 * 1000, 20, 'Too many QRIS requests');
-
-// Railway-optimized security
+// Middleware
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false
 }));
 
-app.use(compression());
-app.use(mongoSanitize());
-app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
-
-// Trust Railway proxy
-app.set('trust proxy', 1);
-
-// Apply rate limiting except for health checks
-app.use((req, res, next) => {
-    if (req.path === '/health' || req.path === '/api/health') {
-        return next();
-    }
-    generalRateLimit(req, res, next);
-});
-
-// ========================================
-// 🔌 DATABASE CONNECTION - Railway Optimized
-// ========================================
-
-mongoose.set('strictQuery', false);
-
-async function connectDB() {
-    try {
-        logger.info('🔌 Connecting to MongoDB Atlas for Railway...');
-        
-        await mongoose.connect(process.env.MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            retryWrites: true,
-            w: 'majority',
-            maxPoolSize: 10,
-            serverSelectionTimeoutMS: 30000,
-            socketTimeoutMS: 45000,
-        });
-        
-        logger.info('✅ MongoDB Atlas connected successfully!');
-        
-        mongoose.connection.on('error', (err) => {
-            logger.error('MongoDB error:', err);
-        });
-        
-        mongoose.connection.on('disconnected', () => {
-            logger.warn('MongoDB disconnected');
-        });
-        
-    } catch (error) {
-        logger.error('❌ MongoDB connection failed:', error);
-        setTimeout(connectDB, 5000);
-    }
-}
-
-connectDB();
-
-// ========================================
-// 🌐 ENHANCED CORS CONFIGURATION - FIXED & SECURE
-// ========================================
-
-console.log('🔧 Setting up ENHANCED CORS configuration...');
-
-// Define allowed origins dengan environment-based configuration
-const getAllowedOrigins = () => {
-    const baseOrigins = [
-        // Production domains
-        'https://gosokangkahoki.com',
-        'https://www.gosokangkahoki.com',
-        
-        // Railway deployment URL
-        'https://gosokangka-backend-production-e9fa.up.railway.app',
-        
-        // Common deployment platforms
-        'https://gosokangka.netlify.app',
-        'https://gosokangka.vercel.app',
-        'https://gosokangka-frontend.vercel.app',
-        
-        // CDN and static hosting
-        'https://cdn.jsdelivr.net',
-        'https://unpkg.com'
-    ];
-    
-    // Add development origins in non-production environment
-    if (process.env.NODE_ENV !== 'production') {
-        baseOrigins.push(
-            'http://localhost:3000',
-            'http://localhost:3001',
-            'http://localhost:5000',
-            'http://localhost:5173', // Vite default
-            'http://localhost:8080',
-            'http://127.0.0.1:3000',
-            'http://127.0.0.1:5173',
-            'http://127.0.0.1:8080',
-            'http://[::1]:3000',
-            'http://[::1]:5173'
-        );
-    }
-    
-    return baseOrigins;
-};
-
-const allowedOrigins = getAllowedOrigins();
-
-// Enhanced CORS middleware with detailed logging
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    const method = req.method;
-    const userAgent = req.headers['user-agent'] || 'Unknown';
-    
-    console.log(`📡 [${new Date().toISOString()}] ${method} ${req.url}`);
-    console.log(`   Origin: ${origin || 'no-origin'}`);
-    console.log(`   User-Agent: ${userAgent.substring(0, 50)}...`);
-    
-    next();
-});
-
-// Main CORS configuration with enhanced security
-const corsOptions = {
-    origin: function(origin, callback) {
-        console.log('🔍 CORS origin check:', origin);
-        
-        // Allow requests with no origin (mobile apps, postman, server-to-server)
-        if (!origin) {
-            console.log('✅ No origin - allowing (mobile/postman/server)');
-            return callback(null, true);
-        }
-        
-        // Check against allowed origins list
-        const isAllowed = allowedOrigins.some(allowedOrigin => {
-            // Exact match
-            if (origin === allowedOrigin) {
-                return true;
-            }
-            
-            // Subdomain match for development
-            if (allowedOrigin.includes('localhost') || allowedOrigin.includes('127.0.0.1')) {
-                const originHost = new URL(origin).hostname;
-                const allowedHost = new URL(allowedOrigin).hostname;
-                return originHost === allowedHost;
-            }
-            
-            // Subdomain match for production domains
-            if (allowedOrigin.includes('gosokangkahoki.com')) {
-                return origin.endsWith('.gosokangkahoki.com') || origin === 'https://gosokangkahoki.com';
-            }
-            
-            return false;
-        });
-        
-        if (isAllowed) {
-            console.log('✅ Origin ALLOWED:', origin);
-            return callback(null, true);
-        }
-        
-        // Special case untuk development ports
-        try {
-            const originUrl = new URL(origin);
-            const hostname = originUrl.hostname;
-            const port = originUrl.port;
-            
-            // Allow localhost dengan port apapun di development
-            if (process.env.NODE_ENV !== 'production' && 
-                (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]')) {
-                console.log('✅ Development localhost allowed:', origin);
-                return callback(null, true);
-            }
-            
-            // Allow Railway preview deployments
-            if (hostname.includes('railway.app') || hostname.includes('up.railway.app')) {
-                console.log('✅ Railway deployment allowed:', origin);
-                return callback(null, true);
-            }
-            
-            // Allow Netlify/Vercel preview deployments
-            if (hostname.includes('netlify.app') || hostname.includes('vercel.app')) {
-                console.log('✅ Platform deployment allowed:', origin);
-                return callback(null, true);
-            }
-            
-        } catch (urlError) {
-            console.log('⚠️ Invalid origin URL format:', origin);
-        }
-        
-        console.log('❌ Origin REJECTED:', origin);
-        // In production, reject unknown origins
-        if (process.env.NODE_ENV === 'production') {
-            return callback(new Error('CORS policy violation'), false);
-        } else {
-            // In development, allow for testing but log the rejection
-            console.log('🔓 Development mode: allowing rejected origin');
-            return callback(null, true);
-        }
-    },
-    
+app.use(cors({
+    origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
     credentials: true,
-    
-    methods: [
-        'GET', 
-        'POST', 
-        'PUT', 
-        'DELETE', 
-        'OPTIONS', 
-        'PATCH', 
-        'HEAD'
-    ],
-    
-    allowedHeaders: [
-        'Content-Type',
-        'Authorization',
-        'X-Requested-With',
-        'Accept',
-        'Origin',
-        'Access-Control-Request-Method',
-        'Access-Control-Request-Headers',
-        'X-Session-ID',
-        'X-CSRF-Token',
-        'X-Request-ID',
-        'Cache-Control',
-        'Pragma',
-        'Expires',
-        'User-Agent',
-        'DNT',
-        'If-Modified-Since',
-        'Keep-Alive',
-        'X-Forwarded-For',
-        'X-Real-IP'
-    ],
-    
-    exposedHeaders: [
-        'Content-Length', 
-        'Content-Range',
-        'X-Request-ID',
-        'X-Total-Count',
-        'X-Page-Count'
-    ],
-    
-    optionsSuccessStatus: 200,
-    maxAge: 86400, // 24 hours
-    preflightContinue: false
-};
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Apply main CORS middleware
-app.use(cors(corsOptions));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Additional CORS headers middleware untuk ensure compatibility
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    
-    // Set specific origin header
-    if (origin && allowedOrigins.includes(origin)) {
-        res.header('Access-Control-Allow-Origin', origin);
-    } else if (!origin) {
-        // No origin (mobile apps, server-to-server)
-        res.header('Access-Control-Allow-Origin', '*');
-    } else if (process.env.NODE_ENV !== 'production') {
-        // Development mode - be more permissive
-        res.header('Access-Control-Allow-Origin', origin);
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,
+    message: { error: 'Too many requests from this IP, please try again later.' }
+});
+app.use('/api/', limiter);
+
+// Auth rate limiting
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5,
+    message: { error: 'Too many authentication attempts, please try again later.' }
+});
+
+// ========================================
+// DATABASE MODELS
+// ========================================
+
+// User Schema - ENHANCED dengan validasi terbaik dari Dokumen 1
+const userSchema = new mongoose.Schema({
+    name: { type: String, required: true, trim: true, minlength: 2 },
+    email: { 
+        type: String, 
+        trim: true, 
+        lowercase: true, 
+        sparse: true,  // Ini penting: index sparse
+        default: null  // Default null bukan undefined
+    },
+    phone: { 
+        type: String, 
+        trim: true, 
+        sparse: true,  // Ini penting: index sparse
+        default: null  // Default null bukan undefined
+    },
+    password: { type: String, required: true, minlength: 6 },
+    balance: { type: Number, default: 0, min: 0 },
+    accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
+    isActive: { type: Boolean, default: true },
+    totalProfit: { type: Number, default: 0 },
+    totalLoss: { type: Number, default: 0 },
+    referralCode: { type: String, unique: true },
+    // Bank Data untuk Withdrawal
+    bankData: {
+        bankName: { type: String, trim: true },
+        accountNumber: { type: String, trim: true },
+        accountHolder: { type: String, trim: true }
+    },
+    // Admin Settings untuk User Trading - ENHANCED
+    adminSettings: {
+        forceWin: { type: Boolean, default: false },
+        forceWinRate: { type: Number, default: 0, min: 0, max: 100 },
+        profitCollapse: { 
+            type: String, 
+            enum: ['profit', 'collapse', 'normal'], 
+            default: 'normal' 
+        },
+        profitPercentage: { 
+            type: Number, 
+            default: 80, 
+            min: 20, 
+            max: 100,
+            validate: {
+                validator: function(v) {
+                    return Number.isInteger(v) && v >= 20 && v <= 100;
+                },
+                message: 'Profit percentage must be an integer between 20 and 100'
+            }
+        }
+    },
+    stats: {
+        totalTrades: { type: Number, default: 0, min: 0 },
+        winTrades: { type: Number, default: 0, min: 0 },
+        loseTrades: { type: Number, default: 0, min: 0 }
+    },
+    lastLoginAt: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+});
+
+// PERBAIKAN INDEX dari Dokumen 1: Pastikan unique tapi sparse untuk email dan phone
+userSchema.index({ email: 1 }, { 
+    unique: true, 
+    sparse: true,
+    partialFilterExpression: { email: { $exists: true, $ne: null } }
+});
+userSchema.index({ phone: 1 }, { 
+    unique: true, 
+    sparse: true,
+    partialFilterExpression: { phone: { $exists: true, $ne: null } }
+});
+
+// Custom validation dari Dokumen 1: user harus punya email ATAU phone
+userSchema.pre('validate', function(next) {
+    if (!this.email && !this.phone) {
+        this.invalidate('email', 'Either email or phone number is required');
+        this.invalidate('phone', 'Either email or phone number is required');
+    }
+    next();
+});
+
+// Pre-save middleware to ensure adminSettings defaults
+userSchema.pre('save', function(next) {
+    if (!this.adminSettings) {
+        this.adminSettings = {
+            forceWin: false,
+            forceWinRate: 0,
+            profitCollapse: 'normal',
+            profitPercentage: 80
+        };
+    } else {
+        // Ensure all adminSettings have default values
+        if (this.adminSettings.profitPercentage === undefined || this.adminSettings.profitPercentage === null) {
+            this.adminSettings.profitPercentage = 80;
+        }
+        if (this.adminSettings.profitCollapse === undefined || this.adminSettings.profitCollapse === null) {
+            this.adminSettings.profitCollapse = 'normal';
+        }
+        if (this.adminSettings.forceWin === undefined || this.adminSettings.forceWin === null) {
+            this.adminSettings.forceWin = false;
+        }
+        if (this.adminSettings.forceWinRate === undefined || this.adminSettings.forceWinRate === null) {
+            this.adminSettings.forceWinRate = 0;
+        }
     }
     
-    // Essential CORS headers
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD');
-    res.header('Access-Control-Allow-Headers', 
-        'Content-Type, Authorization, Content-Length, X-Requested-With, Accept, Origin, ' +
-        'X-Session-ID, Cache-Control, Pragma, X-CSRF-Token, X-Request-ID, User-Agent, DNT');
-    res.header('Access-Control-Expose-Headers', 
-        'Content-Length, X-Request-ID, X-Total-Count, X-Page-Count');
-    res.header('Access-Control-Max-Age', '86400');
-    
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        console.log('✅ Handling OPTIONS preflight for:', req.url, 'from origin:', origin);
-        res.status(200).end();
-        return;
+    if (!this.stats) {
+        this.stats = {
+            totalTrades: 0,
+            winTrades: 0,
+            loseTrades: 0
+        };
     }
     
     next();
 });
 
-console.log('✅ Enhanced CORS configuration applied successfully!');
-console.log('🔒 Allowed origins:', allowedOrigins.length, 'domains');
-console.log('🌍 Environment:', process.env.NODE_ENV);
-
-// ========================================
-// 📁 FILE UPLOAD - Railway Optimized
-// ========================================
-
-const storage = multer.memoryStorage();
-const upload = multer({
-    storage: storage,
-    limits: {
-        fileSize: 5 * 1024 * 1024,
-        files: 1
-    },
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Only image files allowed'), false);
-        }
-    }
-});
-
-// ========================================
-// 👥 ONLINE USERS TRACKING SYSTEM
-// ========================================
-
-// In-memory store untuk online users
-const onlineUsers = new Map();
-
-function addOnlineUser(userId, socketId, userInfo) {
-    onlineUsers.set(userId, {
-        socketId,
-        userInfo,
-        lastSeen: new Date(),
-        connectTime: new Date()
-    });
-    
-    logger.info(`User online: ${userInfo.name} (${userId})`);
-}
-
-function removeOnlineUser(userId) {
-    const user = onlineUsers.get(userId);
-    if (user) {
-        onlineUsers.delete(userId);
-        logger.info(`User offline: ${user.userInfo.name} (${userId})`);
-    }
-}
-
-function updateUserActivity(userId) {
-    const user = onlineUsers.get(userId);
-    if (user) {
-        user.lastSeen = new Date();
-    }
-}
-
-function getOnlineUsers() {
-    const users = Array.from(onlineUsers.values()).map(user => ({
-        userId: user.userInfo._id,
-        name: user.userInfo.name,
-        phoneNumber: user.userInfo.phoneNumber,
-        lastSeen: user.lastSeen,
-        connectTime: user.connectTime,
-        onlineDuration: Math.floor((Date.now() - user.connectTime.getTime()) / 1000)
-    }));
-    
-    return {
-        count: users.length,
-        users: users.sort((a, b) => b.lastSeen - a.lastSeen)
-    };
-}
-
-// Cleanup offline users every 5 minutes
-setInterval(() => {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    const toRemove = [];
-    
-    for (const [userId, user] of onlineUsers.entries()) {
-        if (user.lastSeen < fiveMinutesAgo) {
-            toRemove.push(userId);
-        }
-    }
-    
-    toRemove.forEach(userId => removeOnlineUser(userId));
-    
-    if (toRemove.length > 0) {
-        logger.info(`Cleaned up ${toRemove.length} inactive users`);
-    }
-}, 5 * 60 * 1000);
-
-// ========================================
-// 🔄 SOCKET.IO - Enhanced CORS Configuration + Online Tracking
-// ========================================
-
-const io = socketIO(server, {
-    cors: {
-        origin: function(origin, callback) {
-            console.log('🔍 Socket.IO CORS check for origin:', origin);
-            
-            // Allow no origin
-            if (!origin) {
-                console.log('✅ Socket.IO: No origin allowed');
-                return callback(null, true);
-            }
-            
-            // Check against same allowed origins as main CORS
-            const isAllowed = allowedOrigins.some(allowedOrigin => {
-                if (origin === allowedOrigin) return true;
-                
-                // Handle localhost development
-                if (process.env.NODE_ENV !== 'production') {
-                    try {
-                        const originUrl = new URL(origin);
-                        const allowedUrl = new URL(allowedOrigin);
-                        if (originUrl.hostname === allowedUrl.hostname) return true;
-                    } catch (e) {
-                        // Ignore URL parsing errors
-                    }
-                }
-                
-                return false;
-            });
-            
-            if (isAllowed) {
-                console.log('✅ Socket.IO origin allowed:', origin);
-                return callback(null, true);
-            }
-            
-            // Development fallback
-            if (process.env.NODE_ENV !== 'production') {
-                console.log('🔓 Socket.IO development mode: allowing origin:', origin);
-                return callback(null, true);
-            }
-            
-            console.log('❌ Socket.IO origin rejected:', origin);
-            return callback(new Error('Socket.IO CORS policy violation'), false);
-        },
-        
-        credentials: true,
-        methods: ["GET", "POST"],
-        
-        allowedHeaders: [
-            "Content-Type", 
-            "Authorization",
-            "X-Requested-With",
-            "Accept",
-            "Origin",
-            "X-Session-ID"
-        ],
-        
-        transports: ['websocket', 'polling']
-    },
-    
-    // Enhanced Socket.IO configuration
-    transports: ['websocket', 'polling'],
-    pingTimeout: 60000,
-    pingInterval: 25000,
-    allowEIO3: true,
-    upgradeTimeout: 30000,
-    maxHttpBufferSize: 1e6
-});
-
-// Socket Manager dengan QRIS Events + Online Tracking
-const socketManager = {
-    broadcastPrizeUpdate: (data) => {
-        io.emit('prizes:updated', data);
-        logger.info('Broadcasting prize update');
-    },
-    broadcastSettingsUpdate: (data) => {
-        io.emit('settings:updated', data);
-        logger.info('Broadcasting settings update');
-    },
-    broadcastUserUpdate: (data) => {
-        io.emit('users:updated', data);
-        logger.info('Broadcasting user update');
-    },
-    broadcastNewWinner: (data) => {
-        io.emit('winner:new', data);
-        logger.info('Broadcasting new winner');
-    },
-    broadcastNewScratch: (data) => {
-        io.emit('scratch:new', data);
-        logger.info('Broadcasting new scratch');
-    },
-    broadcastNewUser: (data) => {
-        io.emit('user:new-registration', data);
-        logger.info('Broadcasting new user');
-    },
-    broadcastTokenPurchase: (data) => {
-        io.to('admin-room').emit('token:purchased', data);
-        io.to(`user-${data.userId}`).emit('user:token-updated', {
-            userId: data.userId,
-            newBalance: data.newBalance,
-            quantity: data.quantity,
-            message: `${data.quantity} token berhasil ditambahkan!`
-        });
-    },
-    broadcastTokenRequest: (data) => {
-        io.to('admin-room').emit('token:request-received', data);
-    },
-    // 🆕 QRIS Events
-    broadcastQRISRequest: (data) => {
-        io.to('admin-room').emit('qris:request-received', data);
-        logger.info('Broadcasting QRIS request to admin');
-    },
-    broadcastQRISApproval: (data) => {
-        io.to(`user-${data.userId}`).emit('qris:approved', data);
-        io.to('admin-room').emit('qris:approved', data);
-        logger.info('Broadcasting QRIS approval');
-    },
-    broadcastQRISRejection: (data) => {
-        io.to(`user-${data.userId}`).emit('qris:rejected', data);
-        io.to('admin-room').emit('qris:rejected', data);
-        logger.info('Broadcasting QRIS rejection');
-    },
-    // 🆕 Online Users Events
-    broadcastOnlineUsers: () => {
-        const onlineData = getOnlineUsers();
-        io.to('admin-room').emit('users:online-updated', onlineData);
-    },
-    broadcastDailyTokenDistribution: (data) => {
-        io.to('admin-room').emit('tokens:daily-distributed', data);
-        logger.info('Broadcasting daily token distribution');
-    }
-};
-
-// Body parser middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-console.log('✅ Railway-optimized middleware configured with enhanced CORS');
-
-// ========================================
-// 🗄️ DATABASE SCHEMAS - Complete Production Ready + QRIS + Online Tracking
-// ========================================
-
-// 📱 UPDATED USER SCHEMA - PHONE ONLY
-const userSchema = new mongoose.Schema({
-    name: { type: String, required: true, index: true },
-    phoneNumber: { type: String, required: true, unique: true, index: true },
-    password: { type: String, required: true },
-    status: { type: String, default: 'active', enum: ['active', 'inactive', 'suspended', 'banned'] },
-    scratchCount: { type: Number, default: 0 },
-    winCount: { type: Number, default: 0 },
-    lastScratchDate: { type: Date, index: true },
-    customWinRate: { type: Number, default: null, min: 0, max: 100 },
-    freeScratchesRemaining: { type: Number, default: 1, min: 0 },
-    paidScratchesRemaining: { type: Number, default: 0, min: 0 },
-    totalPurchasedScratches: { type: Number, default: 0, min: 0 },
-    forcedWinningNumber: { type: String, default: null, match: /^\d{4}$/ },
-    preparedScratchNumber: { type: String, default: null, match: /^\d{4}$/ },
-    preparedScratchDate: { type: Date, default: null },
-    preparedForcedPrizeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prize', default: null },
-    lastLoginDate: { type: Date, default: Date.now },
-    loginAttempts: { type: Number, default: 0, max: 10 },
-    lockedUntil: { type: Date },
-    totalSpent: { type: Number, default: 0 },
-    totalWon: { type: Number, default: 0 },
-    lastActiveDate: { type: Date, default: Date.now },
-    // 🆕 Online tracking fields
-    isOnline: { type: Boolean, default: false },
-    lastOnlineDate: { type: Date, default: Date.now },
-    createdAt: { type: Date, default: Date.now, index: true }
-});
-
-const adminSchema = new mongoose.Schema({
-    username: { type: String, required: true, unique: true, index: true },
-    password: { type: String, required: true },
-    name: { type: String, required: true },
-    role: { type: String, default: 'admin', enum: ['admin', 'super_admin'] },
-    permissions: [{ type: String }],
-    lastLoginDate: { type: Date },
-    loginAttempts: { type: Number, default: 0, max: 5 },
-    lockedUntil: { type: Date },
-    isActive: { type: Boolean, default: true },
-    createdAt: { type: Date, default: Date.now }
-});
-
-const prizeSchema = new mongoose.Schema({
-    winningNumber: { type: String, required: true, unique: true, match: /^\d{4}$/, index: true },
-    name: { type: String, required: true, minlength: 3, maxlength: 100 },
-    type: { type: String, enum: ['voucher', 'cash', 'physical'], required: true },
-    value: { type: Number, required: true, min: 1000 },
-    stock: { type: Number, required: true, min: 0 },
-    originalStock: { type: Number, default: 0 },
-    isActive: { type: Boolean, default: true, index: true },
-    description: { type: String, maxlength: 500 },
-    category: { type: String, default: 'general' },
-    priority: { type: Number, default: 0 },
-    createdAt: { type: Date, default: Date.now }
-});
-
-const scratchSchema = new mongoose.Schema({
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    scratchNumber: { type: String, required: true, match: /^\d{4}$/ },
-    isWin: { type: Boolean, default: false, index: true },
-    prizeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prize' },
-    isPaid: { type: Boolean, default: false },
-    scratchDate: { type: Date, default: Date.now, index: true }
-});
-
-const winnerSchema = new mongoose.Schema({
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    prizeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prize', required: true },
-    scratchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Scratch', required: true },
-    claimStatus: { type: String, enum: ['pending', 'completed', 'expired'], default: 'pending', index: true },
-    claimCode: { type: String, required: true, unique: true, index: true },
-    scratchDate: { type: Date, default: Date.now, index: true },
-    claimDate: { type: Date },
-    expiryDate: { type: Date }
-});
-
-// 🆕 ENHANCED GAME SETTINGS - With Daily Token Distribution
-const gameSettingsSchema = new mongoose.Schema({
-    winProbability: { type: Number, default: 5, min: 0, max: 100 },
-    maxFreeScratchesPerDay: { type: Number, default: 1, min: 0, max: 10 },
-    scratchTokenPrice: { type: Number, default: 25000, min: 1000 },
-    isGameActive: { type: Boolean, default: true },
-    resetTime: { type: String, default: '00:00' },
-    maintenanceMode: { type: Boolean, default: false },
-    maintenanceMessage: { type: String, default: 'System maintenance' },
-    // 🆕 Daily token distribution settings
-    dailyTokenDistribution: { type: Boolean, default: true },
-    dailyTokenAmount: { type: Number, default: 1, min: 0, max: 10 },
-    lastDistributionDate: { type: Date },
-    distributionTime: { type: String, default: '00:00' },
-    // 🆕 Manual token addition tracking
-    allowManualTokens: { type: Boolean, default: true },
-    lastUpdated: { type: Date, default: Date.now }
-});
-
-// 🆕 Enhanced Token Purchase Schema dengan QRIS Support
-const tokenPurchaseSchema = new mongoose.Schema({
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
-    quantity: { type: Number, required: true, min: 1 },
-    pricePerToken: { type: Number, required: true },
-    totalAmount: { type: Number, required: true },
-    paymentStatus: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending', index: true },
-    paymentMethod: { type: String, enum: ['bank', 'qris', 'cash', 'manual', 'daily_gift'], default: 'bank' },
-    notes: { type: String },
-    purchaseDate: { type: Date, default: Date.now, index: true },
-    completedDate: { type: Date },
-    // 🆕 QRIS specific fields
-    qrisTransactionId: { type: String, index: true },
-    qrisReference: { type: String },
-    qrisTimestamp: { type: Date }
-});
-
-// 🆕 QRIS Configuration Schema
-const qrisConfigSchema = new mongoose.Schema({
-    isActive: { type: Boolean, default: true },
-    merchantName: { type: String, default: 'Gosok Angka Hoki' },
-    merchantId: { type: String, default: 'GOSOKANGKA001' },
-    qrisImageUrl: { type: String, default: '/api/payment/qris' },
-    instructions: { type: String, default: 'Scan QRIS, bayar sesuai nominal, lalu konfirmasi ke admin' },
-    autoApproval: { type: Boolean, default: false },
-    maxAmount: { type: Number, default: 10000000 }, // 10 juta
-    minAmount: { type: Number, default: 25000 },
-    lastUpdated: { type: Date, default: Date.now }
-});
-
+// Bank Account Schema untuk Admin Panel
 const bankAccountSchema = new mongoose.Schema({
     bankName: { type: String, required: true },
     accountNumber: { type: String, required: true },
     accountHolder: { type: String, required: true },
-    isActive: { type: Boolean, default: true, index: true },
+    isActive: { type: Boolean, default: true },
+    note: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 
-// Create Models
+// Trade Schema - ENHANCED
+const tradeSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    symbol: { type: String, required: true },
+    direction: { type: String, enum: ['buy', 'sell'], required: true },
+    amount: { type: Number, required: true, min: 500000 },
+    duration: { type: Number, required: true, min: 30, max: 300 },
+    entryPrice: { type: Number, required: true },
+    exitPrice: { type: Number },
+    status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
+    result: { type: String, enum: ['win', 'lose'] },
+    payout: { type: Number },
+    priceChangePercent: { type: Number },
+    forceResult: { type: String, enum: ['win', 'lose'] },
+    adminForced: { type: Boolean, default: false },
+    profitPercentage: { type: Number, default: 80 },
+    createdAt: { type: Date, default: Date.now },
+    completedAt: { type: Date }
+});
+
+// Deposit Schema - ENHANCED
+const depositSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    amount: { type: Number, required: true, min: 500000 },
+    method: { type: String, default: 'Bank Transfer' },
+    bankFrom: { type: String },
+    receipt: { type: String }, // base64 file data
+    fileName: { type: String },
+    fileType: { type: String },
+    fileSize: { type: Number },
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    adminNotes: { type: String },
+    transferTime: { type: Date },
+    createdAt: { type: Date, default: Date.now },
+    processedAt: { type: Date }
+});
+
+// Withdrawal Schema - ENHANCED
+const withdrawalSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    amount: { type: Number, required: true, min: 100000 },
+    fee: { type: Number, required: true },
+    finalAmount: { type: Number, required: true },
+    bankAccount: {
+        bankName: { type: String, required: true },
+        accountNumber: { type: String, required: true },
+        accountHolder: { type: String, required: true }
+    },
+    status: { type: String, enum: ['pending', 'approved', 'rejected', 'processed'], default: 'pending' },
+    adminNotes: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    processedAt: { type: Date }
+});
+
+// Price Schema - ENHANCED
+const priceSchema = new mongoose.Schema({
+    symbol: { type: String, required: true, unique: true },
+    price: { type: Number, required: true, min: 0 },
+    change: { type: Number, default: 0 },
+    lastUpdate: { type: Date, default: Date.now }
+});
+
+// Activity Schema - ENHANCED
+const activitySchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    action: { type: String, required: true },
+    details: { type: String },
+    ip: { type: String },
+    userAgent: { type: String },
+    createdAt: { type: Date, default: Date.now }
+});
+
+// Chart Data Schema - ENHANCED
+const chartDataSchema = new mongoose.Schema({
+    symbol: { type: String, required: true },
+    timeframe: { type: String, required: true },
+    time: { type: Number, required: true },
+    open: { type: Number, required: true },
+    high: { type: Number, required: true },
+    low: { type: Number, required: true },
+    close: { type: Number, required: true },
+    volume: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
+});
+
+chartDataSchema.index({ symbol: 1, timeframe: 1, time: 1 }, { unique: true });
+
+// Create models
 const User = mongoose.model('User', userSchema);
-const Admin = mongoose.model('Admin', adminSchema);
-const Prize = mongoose.model('Prize', prizeSchema);
-const Scratch = mongoose.model('Scratch', scratchSchema);
-const Winner = mongoose.model('Winner', winnerSchema);
-const GameSettings = mongoose.model('GameSettings', gameSettingsSchema);
-const TokenPurchase = mongoose.model('TokenPurchase', tokenPurchaseSchema);
-const QRISConfig = mongoose.model('QRISConfig', qrisConfigSchema);
 const BankAccount = mongoose.model('BankAccount', bankAccountSchema);
-
-console.log('✅ Database schemas configured for Railway with QRIS support + Phone Only Registration');
+const Trade = mongoose.model('Trade', tradeSchema);
+const Deposit = mongoose.model('Deposit', depositSchema);
+const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
+const Price = mongoose.model('Price', priceSchema);
+const Activity = mongoose.model('Activity', activitySchema);
+const ChartData = mongoose.model('ChartData', chartDataSchema);
 
 // ========================================
-// 🔧 HELPER FUNCTIONS - WIN RATE LOGIC + TOKEN DISTRIBUTION
+// HELPER FUNCTIONS
 // ========================================
 
-// ✅ Helper function untuk generate non-winning number
-function generateNonWinningNumber(winningNumbers) {
-    let attempts = 0;
-    let number;
-    
-    do {
-        number = Math.floor(1000 + Math.random() * 9000).toString();
-        attempts++;
-        
-        // Safety: max 100 attempts
-        if (attempts > 100) {
-            // Fallback: gunakan angka yang pasti tidak menang
-            const safeNumbers = ['0000', '9999', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888'];
-            for (const safeNum of safeNumbers) {
-                if (!winningNumbers.includes(safeNum)) {
-                    return safeNum;
-                }
-            }
-            // Last resort
-            return '0001';
-        }
-    } while (winningNumbers.includes(number));
-    
-    return number;
+// Chart Data Management
+let chartDataStore = new Map();
+let isInitialized = false;
+
+function generateReferralCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// 🆕 QRIS Helper Functions
-function generateQRISTransactionId() {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    return `QRIS_${timestamp}_${random}`;
-}
-
-function generateQRISReference() {
-    return Math.random().toString(36).substring(2, 10).toUpperCase();
-}
-
-// 🆕 Phone Number Helper Functions
-function normalizePhoneNumber(phone) {
-    // Remove all non-numeric characters
-    let normalized = phone.replace(/\D/g, '');
-    
-    // Handle Indonesian phone numbers
-    if (normalized.startsWith('62')) {
-        // Already has country code
-        return normalized;
-    } else if (normalized.startsWith('0')) {
-        // Replace leading 0 with 62
-        return '62' + normalized.substring(1);
-    } else if (normalized.startsWith('8')) {
-        // Add country code
-        return '62' + normalized;
-    }
-    
-    return normalized;
-}
-
-function formatPhoneNumber(phone) {
-    const normalized = normalizePhoneNumber(phone);
-    
-    // Format: +62 xxx-xxxx-xxxx
-    if (normalized.startsWith('62') && normalized.length >= 10) {
-        const countryCode = normalized.substring(0, 2);
-        const firstPart = normalized.substring(2, 5);
-        const secondPart = normalized.substring(5, 9);
-        const thirdPart = normalized.substring(9);
-        
-        return `+${countryCode} ${firstPart}-${secondPart}-${thirdPart}`;
-    }
-    
-    return phone; // Return original if can't format
-}
-
-// 🆕 Daily Token Distribution Function
-async function distributeDailyTokens() {
+// Enhanced activity logging with IP and User Agent
+async function logActivity(userId, action, details = '', req = null) {
     try {
-        logger.info('🎁 Starting daily token distribution...');
-        
-        const settings = await GameSettings.findOne();
-        if (!settings || !settings.dailyTokenDistribution) {
-            logger.info('Daily token distribution is disabled');
-            return;
-        }
-        
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        // Check if already distributed today
-        if (settings.lastDistributionDate && settings.lastDistributionDate >= today) {
-            logger.info('Daily tokens already distributed today');
-            return;
-        }
-        
-        // Get active users (last active within 7 days)
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        const activeUsers = await User.find({
-            status: 'active',
-            lastActiveDate: { $gte: sevenDaysAgo }
-        });
-        
-        let distributedCount = 0;
-        const tokenAmount = settings.dailyTokenAmount || 1;
-        
-        for (const user of activeUsers) {
-            // Add free tokens
-            user.freeScratchesRemaining = (user.freeScratchesRemaining || 0) + tokenAmount;
-            await user.save();
-            
-            // Create record
-            const purchase = new TokenPurchase({
-                userId: user._id,
-                quantity: tokenAmount,
-                pricePerToken: 0,
-                totalAmount: 0,
-                paymentStatus: 'completed',
-                paymentMethod: 'daily_gift',
-                notes: `Daily free token distribution - ${today.toDateString()}`,
-                completedDate: new Date()
-            });
-            await purchase.save();
-            
-            distributedCount++;
-        }
-        
-        // Update settings
-        settings.lastDistributionDate = new Date();
-        await settings.save();
-        
-        const distributionData = {
-            date: new Date(),
-            usersCount: distributedCount,
-            tokensPerUser: tokenAmount,
-            totalTokens: distributedCount * tokenAmount
+        const activityData = {
+            userId,
+            action,
+            details
         };
         
-        // Broadcast to admin
-        socketManager.broadcastDailyTokenDistribution(distributionData);
+        if (req) {
+            activityData.ip = req.ip || req.connection.remoteAddress;
+            activityData.userAgent = req.get('User-Agent');
+        }
         
-        logger.info(`✅ Daily token distribution completed: ${distributedCount} users received ${tokenAmount} token(s) each`);
-        
-        return distributionData;
+        await Activity.create(activityData);
+        console.log(`📝 Activity logged: ${action} - ${details}`);
     } catch (error) {
-        logger.error('Daily token distribution error:', error);
-        throw error;
+        console.error('❌ Error logging activity:', error);
     }
 }
 
-// Schedule daily token distribution if cron is available
-if (cron) {
-    // Run every day at midnight
-    cron.schedule('0 0 * * *', () => {
-        distributeDailyTokens().catch(error => {
-            logger.error('Scheduled daily token distribution failed:', error);
-        });
-    });
-    logger.info('✅ Daily token distribution scheduled for midnight');
-} else {
-    logger.warn('⚠️ Daily token distribution scheduling not available (node-cron not loaded)');
+function getTimeframeMinutes(timeframe) {
+    const timeframes = {
+        '1m': 1,
+        '5m': 5,
+        '15m': 15,
+        '30m': 30,
+        '1h': 60,
+        '4h': 240,
+        '1d': 1440
+    };
+    return timeframes[timeframe] || 5;
 }
 
-// ========================================
-// 🔐 MIDDLEWARE - Railway Optimized + Phone Validation
-// ========================================
-
-const handleValidationErrors = (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        return res.status(400).json({
-            error: 'Validation failed',
-            details: errors.array()
-        });
-    }
-    next();
-};
-
-// 📱 UPDATED VALIDATION - Phone Only Registration
-const validateUserRegistration = [
-    body('name').trim().notEmpty().isLength({ min: 2, max: 50 }),
-    body('phoneNumber').notEmpty().custom(value => {
-        const normalized = normalizePhoneNumber(value);
-        if (normalized.length < 10 || normalized.length > 15) {
-            throw new Error('Nomor HP tidak valid');
-        }
-        return true;
-    }),
-    body('password').isLength({ min: 6, max: 100 }),
-    handleValidationErrors
-];
-
-const validateUserLogin = [
-    body('identifier').trim().notEmpty(),
-    body('password').notEmpty(),
-    handleValidationErrors
-];
-
-const validateAdminLogin = [
-    body('username').trim().notEmpty().isLength({ min: 3, max: 50 }),
-    body('password').notEmpty(),
-    handleValidationErrors
-];
-
-const verifyToken = async (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ error: 'Token not found' });
-    }
-    
+function roundTimeToTimeframe(timestamp, timeframe) {
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.userId = decoded.userId;
-        req.userType = decoded.userType;
-        
-        let account;
-        if (decoded.userType === 'admin') {
-            account = await Admin.findById(decoded.userId);
-        } else {
-            account = await User.findById(decoded.userId);
+        const minutes = getTimeframeMinutes(timeframe);
+        const roundedMinutes = Math.floor(timestamp / (minutes * 60 * 1000)) * minutes * 60 * 1000;
+        return roundedMinutes;
+    } catch (error) {
+        console.error('❌ Error rounding time:', error);
+        return timestamp;
+    }
+}
+
+// Enhanced candle generation with better validation
+function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle = null) {
+    try {
+        if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
+            console.error(`❌ Invalid price for ${symbol}:`, currentPrice);
+            return null;
         }
+
+        const now = Date.now();
+        const roundedTime = roundTimeToTimeframe(now, timeframe);
         
-        if (!account) {
-            return res.status(403).json({ error: 'Account not found' });
-        }
-        
-        if (account.lockedUntil && account.lockedUntil > new Date()) {
-            return res.status(423).json({ error: 'Account locked' });
-        }
-        
-        if (decoded.userType === 'user') {
-            account.lastActiveDate = new Date();
-            account.lastOnlineDate = new Date();
-            await account.save();
+        // Jika ini candle baru
+        if (!previousCandle || previousCandle.time < roundedTime) {
+            const volatility = Math.random() * 0.015 + 0.005; // 0.5% to 2% volatility
             
-            // Update online tracking
-            updateUserActivity(decoded.userId);
+            const open = previousCandle ? previousCandle.close : currentPrice;
+            const close = currentPrice;
+            
+            // Generate realistic high and low dengan proper validation
+            const maxPrice = Math.max(open, close);
+            const minPrice = Math.min(open, close);
+            
+            const high = maxPrice * (1 + Math.random() * volatility);
+            const low = minPrice * (1 - Math.random() * volatility);
+            
+            const volume = Math.floor(Math.random() * 900000) + 100000;
+            
+            const candle = {
+                time: Math.floor(roundedTime / 1000),
+                open: parseFloat(Math.max(0.001, open).toFixed(8)),
+                high: parseFloat(Math.max(0.001, high).toFixed(8)),
+                low: parseFloat(Math.max(0.001, low).toFixed(8)),
+                close: parseFloat(Math.max(0.001, close).toFixed(8)),
+                volume
+            };
+            
+            // Ensure OHLC logic is correct
+            candle.high = Math.max(candle.open, candle.high, candle.low, candle.close);
+            candle.low = Math.min(candle.open, candle.high, candle.low, candle.close);
+            
+            return candle;
+        } else {
+            // Update existing candle
+            const updatedCandle = {
+                ...previousCandle,
+                close: parseFloat(Math.max(0.001, currentPrice).toFixed(8)),
+                high: Math.max(previousCandle.high, currentPrice),
+                low: Math.min(previousCandle.low, currentPrice),
+                volume: previousCandle.volume + Math.floor(Math.random() * 50000)
+            };
+            
+            return updatedCandle;
         }
-        
-        next();
     } catch (error) {
-        return res.status(403).json({ error: 'Invalid token' });
+        console.error('❌ Error generating candle:', error);
+        return null;
     }
-};
+}
 
-const verifyAdmin = (req, res, next) => {
-    if (req.userType !== 'admin') {
-        return res.status(403).json({ error: 'Admin access required' });
-    }
-    next();
-};
-
-console.log('✅ Middleware configured for Railway with Phone validation');
-
-// ========================================
-// 🔄 SOCKET.IO HANDLERS - Railway Ready + Online Tracking
-// ========================================
-
-io.use(async (socket, next) => {
+// Enhanced historical data generation
+async function generateHistoricalData(symbol, timeframe, count = 100) {
     try {
-        const token = socket.handshake.auth.token;
-        if (!token) {
-            return next(new Error('Authentication error'));
+        console.log(`📊 Generating historical data for ${symbol}/${timeframe} (${count} candles)`);
+        
+        const currentPrice = await Price.findOne({ symbol });
+        if (!currentPrice || !currentPrice.price || currentPrice.price <= 0) {
+            console.error(`❌ Invalid price data for symbol: ${symbol}`);
+            return [];
         }
         
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        socket.userId = decoded.userId;
-        socket.userType = decoded.userType;
+        const timeframeMs = getTimeframeMinutes(timeframe) * 60 * 1000;
+        const now = Date.now();
+        const data = [];
         
-        // Get user info for online tracking
-        if (decoded.userType === 'user') {
-            const user = await User.findById(decoded.userId).select('name phoneNumber');
-            if (user) {
-                socket.userInfo = user;
+        let price = currentPrice.price;
+        
+        // Generate historical candles dengan trend yang lebih realistis
+        for (let i = count; i >= 0; i--) {
+            const time = Math.floor((now - (i * timeframeMs)) / 1000);
+            
+            // Add realistic price movement dengan trend detection
+            const baseVolatility = 0.01;
+            const timeVolatility = 0.005;
+            const trendFactor = (Math.random() - 0.49) * (baseVolatility + timeVolatility);
+            
+            const newPrice = Math.max(0.001, price * (1 + trendFactor));
+            
+            const open = price;
+            const close = newPrice;
+            const spread = Math.abs(close - open);
+            const high = Math.max(open, close) + (spread * Math.random() * 0.5);
+            const low = Math.min(open, close) - (spread * Math.random() * 0.5);
+            const volume = Math.floor(Math.random() * 1000000) + 100000;
+            
+            const candleData = {
+                time,
+                open: parseFloat(Math.max(0.001, open).toFixed(8)),
+                high: parseFloat(Math.max(0.001, high).toFixed(8)),
+                low: parseFloat(Math.max(0.001, low).toFixed(8)),
+                close: parseFloat(Math.max(0.001, close).toFixed(8)),
+                volume
+            };
+            
+            // Ensure OHLC validation
+            candleData.high = Math.max(candleData.open, candleData.high, candleData.low, candleData.close);
+            candleData.low = Math.min(candleData.open, candleData.high, candleData.low, candleData.close);
+            
+            data.push(candleData);
+            price = newPrice;
+        }
+        
+        // Sort by time
+        data.sort((a, b) => a.time - b.time);
+        
+        console.log(`✅ Generated ${data.length} historical candles for ${symbol}/${timeframe}`);
+        return data;
+        
+    } catch (error) {
+        console.error('❌ Error generating historical data:', error);
+        return [];
+    }
+}
+
+// Enhanced chart data initialization
+async function initializeChartDataForSymbol(symbol, timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']) {
+    try {
+        console.log(`📊 Initializing chart data for ${symbol}`);
+        
+        for (const timeframe of timeframes) {
+            const key = `${symbol}-${timeframe}`;
+            
+            if (!chartDataStore.has(key)) {
+                const historicalData = await generateHistoricalData(symbol, timeframe, 100);
+                if (historicalData && historicalData.length > 0) {
+                    chartDataStore.set(key, historicalData);
+                    console.log(`✅ Initialized ${historicalData.length} candles for ${symbol}/${timeframe}`);
+                } else {
+                    console.error(`❌ Failed to generate data for ${symbol}/${timeframe}`);
+                }
             }
         }
+    } catch (error) {
+        console.error(`❌ Error initializing chart data for ${symbol}:`, error);
+    }
+}
+
+// Enhanced price initialization
+async function initializePrices() {
+    try {
+        const defaultPrices = [
+            { symbol: 'BTC', price: 45000 + (Math.random() * 10000), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'ETH', price: 3200 + (Math.random() * 500), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'LTC', price: 180 + (Math.random() * 20), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'XRP', price: 0.65 + (Math.random() * 0.1), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'DOGE', price: 0.08 + (Math.random() * 0.02), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'TRX', price: 0.12 + (Math.random() * 0.02), change: (Math.random() - 0.5) * 5 }
+        ];
+
+        for (const priceData of defaultPrices) {
+            try {
+                await Price.findOneAndUpdate(
+                    { symbol: priceData.symbol },
+                    {
+                        ...priceData,
+                        price: Math.max(0.001, priceData.price),
+                        lastUpdate: new Date()
+                    },
+                    { upsert: true, new: true }
+                );
+                console.log(`✅ Price initialized for ${priceData.symbol}: $${priceData.price.toFixed(4)}`);
+            } catch (error) {
+                console.error(`❌ Error initializing price for ${priceData.symbol}:`, error);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Error in price initialization:', error);
+    }
+}
+
+// Enhanced price update simulation
+function simulatePriceUpdates() {
+    setInterval(async () => {
+        if (!isInitialized) return;
         
+        try {
+            const prices = await Price.find();
+            
+            for (const price of prices) {
+                // More realistic price movements
+                const baseVolatility = 0.01; // 1%
+                const timeVolatility = Math.random() * 0.02; // 0-2%
+                const marketTrend = Math.sin(Date.now() / 3600000) * 0.005; // Hourly trend
+                
+                const changePercent = (Math.random() - 0.5) * (baseVolatility + timeVolatility) + marketTrend;
+                const newPrice = Math.max(0.001, price.price * (1 + changePercent));
+                const change = ((newPrice - price.price) / price.price) * 100;
+                
+                // Update dengan validation
+                price.price = parseFloat(newPrice.toFixed(price.symbol === 'BTC' ? 0 : 6));
+                price.change = parseFloat(change.toFixed(2));
+                price.lastUpdate = new Date();
+                
+                await price.save();
+                
+                // Broadcast price update
+                io.emit('priceUpdate', {
+                    symbol: price.symbol,
+                    price: price.price,
+                    change: price.change,
+                    lastUpdate: price.lastUpdate
+                });
+                
+                // Update chart data for all timeframes
+                const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+                
+                for (const timeframe of timeframes) {
+                    const key = `${price.symbol}-${timeframe}`;
+                    const currentCandles = chartDataStore.get(key) || [];
+                    const lastCandle = currentCandles[currentCandles.length - 1];
+                    
+                    const newCandle = generateCandleFromPrice(price.symbol, timeframe, price.price, lastCandle);
+                    
+                    if (newCandle && newCandle.time && !isNaN(newCandle.time)) {
+                        // Update or add new candle
+                        if (lastCandle && lastCandle.time === newCandle.time) {
+                            currentCandles[currentCandles.length - 1] = newCandle;
+                        } else {
+                            currentCandles.push(newCandle);
+                            // Keep only last 200 candles
+                            if (currentCandles.length > 200) {
+                                currentCandles.shift();
+                            }
+                        }
+                        
+                        chartDataStore.set(key, currentCandles);
+                        
+                        // Broadcast chart update (reduced frequency)
+                        if (Math.random() < 0.1) { // 10% chance to broadcast
+                            io.emit('chartUpdate', {
+                                symbol: price.symbol,
+                                timeframe: timeframe,
+                                candle: newCandle
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error updating prices:', error);
+        }
+    }, 2000); // Update every 2 seconds
+}
+
+// Enhanced trade completion checker
+function checkTradesToComplete() {
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
+            
+            for (const trade of activeTrades) {
+                const createdAt = new Date(trade.createdAt);
+                const elapsedSeconds = Math.floor((now - createdAt) / 1000);
+                
+                if (elapsedSeconds >= trade.duration) {
+                    // Get current price
+                    const currentPrice = await Price.findOne({ symbol: trade.symbol });
+                    
+                    if (currentPrice && currentPrice.price > 0) {
+                        trade.exitPrice = currentPrice.price;
+                        trade.status = 'completed';
+                        trade.completedAt = now;
+                        
+                        // Calculate price change
+                        const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
+                        trade.priceChangePercent = priceChangePercent;
+                        
+                        // Enhanced result determination dengan validasi admin settings
+                        let result;
+                        
+                        // Check admin settings first dengan prioritas
+                        if (trade.userId.adminSettings?.profitCollapse === 'profit') {
+                            result = 'win';
+                            trade.adminForced = true;
+                            trade.forceResult = 'win';
+                        } else if (trade.userId.adminSettings?.profitCollapse === 'collapse') {
+                            result = 'lose';
+                            trade.adminForced = true;
+                            trade.forceResult = 'lose';
+                        } else if (trade.forceResult) {
+                            result = trade.forceResult;
+                            trade.adminForced = true;
+                        } else if (trade.userId.adminSettings?.forceWin && trade.userId.adminSettings.forceWinRate > 0) {
+                            const winChance = Math.random() * 100;
+                            if (winChance <= trade.userId.adminSettings.forceWinRate) {
+                                result = 'win';
+                                trade.adminForced = true;
+                            } else {
+                                result = 'lose';
+                                trade.adminForced = true;
+                            }
+                        } else {
+                            // Natural market result
+                            if (trade.direction === 'buy') {
+                                result = currentPrice.price > trade.entryPrice ? 'win' : 'lose';
+                            } else {
+                                result = currentPrice.price < trade.entryPrice ? 'win' : 'lose';
+                            }
+                        }
+                        
+                        trade.result = result;
+                        
+                        // Enhanced payout calculation dengan validation
+                        const profitPercentage = Math.max(20, Math.min(100, 
+                            trade.profitPercentage || 
+                            trade.userId.adminSettings?.profitPercentage || 
+                            80
+                        ));
+                        
+                        if (result === 'win') {
+                            const profitAmount = trade.amount * profitPercentage / 100;
+                            trade.payout = trade.amount + profitAmount;
+                            trade.userId.balance += trade.payout;
+                            trade.userId.totalProfit += profitAmount;
+                        } else {
+                            trade.payout = 0;
+                            trade.userId.totalLoss += trade.amount;
+                        }
+                        
+                        // Update user stats dengan validation
+                        trade.userId.stats.totalTrades = (trade.userId.stats.totalTrades || 0) + 1;
+                        if (result === 'win') {
+                            trade.userId.stats.winTrades = (trade.userId.stats.winTrades || 0) + 1;
+                        } else {
+                            trade.userId.stats.loseTrades = (trade.userId.stats.loseTrades || 0) + 1;
+                        }
+                        
+                        await trade.save();
+                        await trade.userId.save();
+                        
+                        // Enhanced activity logging
+                        await logActivity(
+                            trade.userId._id, 
+                            'TRADE_COMPLETED', 
+                            `${trade.symbol} ${trade.direction.toUpperCase()} ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''}`
+                        );
+                        
+                        // Notify user via socket
+                        io.to(trade.userId._id.toString()).emit('tradeCompleted', {
+                            trade: {
+                                _id: trade._id,
+                                symbol: trade.symbol,
+                                direction: trade.direction,
+                                amount: trade.amount,
+                                result: trade.result,
+                                payout: trade.payout,
+                                adminForced: trade.adminForced
+                            },
+                            result,
+                            payout: trade.payout,
+                            newBalance: trade.userId.balance
+                        });
+                        
+                        console.log(`✅ Trade completed: ${trade._id} - ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error checking trades:', error);
+        }
+    }, 1000); // Check every second
+}
+
+// Enhanced database connection check middleware
+const checkDatabaseConnection = (req, res, next) => {
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ 
+            error: 'Database temporarily unavailable',
+            message: 'Please try again in a few moments'
+        });
+    }
+    next();
+};
+
+// Enhanced authentication middleware
+const authenticateToken = async (req, res, next) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+
+        if (!token) {
+            return res.status(401).json({ error: 'Access token required' });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await User.findById(decoded.userId);
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        if (!user.isActive) {
+            return res.status(403).json({ error: 'Account is deactivated' });
+        }
+        
+        req.userId = decoded.userId;
+        req.user = user;
         next();
-    } catch (err) {
-        next(new Error('Authentication error'));
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            return res.status(403).json({ error: 'Token expired' });
+        } else if (error.name === 'JsonWebTokenError') {
+            return res.status(403).json({ error: 'Invalid token' });
+        }
+        return res.status(403).json({ error: 'Token verification failed' });
     }
+};
+
+// Enhanced admin middleware
+const requireAdmin = async (req, res, next) => {
+    try {
+        if (!req.user || req.user.email !== 'admin@tradestation.com') {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+        next();
+    } catch (error) {
+        return res.status(403).json({ error: 'Admin verification failed' });
+    }
+};
+
+// Utility function untuk format currency
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount || 0);
+}
+
+// FUNGSI VALIDASI TERBAIK dari Dokumen 1
+function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+}
+
+function isValidPhone(phone) {
+    if (!phone || typeof phone !== 'string') return false;
+    // Mendukung format Indonesia: 08xxx, +628xxx, 628xxx, atau international
+    const phoneRegex = /^(\+?62|0)[0-9]{9,13}$/;
+    const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Remove spaces, dashes, parentheses
+    return phoneRegex.test(cleanPhone);
+}
+
+// ========================================
+// DATABASE OPTIMIZATION MIDDLEWARE dari Dokumen 2
+// ========================================
+
+// Add connection monitoring
+mongoose.connection.on('connected', () => {
+    console.log('✅ MongoDB connected successfully');
 });
 
-io.on('connection', (socket) => {
-    logger.info('User connected:', socket.userId);
+mongoose.connection.on('error', (err) => {
+    console.error('❌ MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('⚠️ MongoDB disconnected');
+});
+
+// Add memory monitoring
+setInterval(() => {
+    const used = process.memoryUsage();
+    const memoryUsage = {
+        rss: Math.round(used.rss / 1024 / 1024 * 100) / 100,
+        heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100,
+        heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100,
+        external: Math.round(used.external / 1024 / 1024 * 100) / 100
+    };
     
-    socket.join(`user-${socket.userId}`);
-    
-    if (socket.userType === 'admin') {
-        socket.join('admin-room');
-    } else if (socket.userType === 'user' && socket.userInfo) {
-        // Add to online users tracking
-        addOnlineUser(socket.userId, socket.id, socket.userInfo);
-        
-        // Update user online status
-        User.findByIdAndUpdate(socket.userId, {
-            isOnline: true,
-            lastOnlineDate: new Date()
-        }).catch(err => logger.error('Failed to update user online status:', err));
-        
-        // Broadcast updated online users to admin
-        socketManager.broadcastOnlineUsers();
+    if (memoryUsage.heapUsed > 200) { // Alert if heap > 200MB
+        console.log('⚠️ High memory usage:', memoryUsage);
     }
+}, 30000); // Check every 30 seconds
 
-    // Handle user activity
-    socket.on('user:activity', () => {
-        if (socket.userType === 'user') {
-            updateUserActivity(socket.userId);
-        }
-    });
+// ========================================
+// IMPROVED ERROR HANDLING dari Dokumen 2
+// ========================================
 
-    socket.on('disconnect', (reason) => {
-        logger.info('User disconnected:', socket.userId, 'Reason:', reason);
-        
-        if (socket.userType === 'user') {
-            // Remove from online tracking
-            removeOnlineUser(socket.userId);
-            
-            // Update user online status
-            User.findByIdAndUpdate(socket.userId, {
-                isOnline: false,
-                lastOnlineDate: new Date()
-            }).catch(err => logger.error('Failed to update user offline status:', err));
-            
-            // Broadcast updated online users to admin
-            socketManager.broadcastOnlineUsers();
-        }
-    });
+// Global error handler untuk unhandled promises
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Log to file in production
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    // Graceful shutdown
+    process.exit(1);
 });
 
 // ========================================
-// 🚨 RAILWAY HEALTH CHECK ENDPOINTS
+// DATABASE INDEX OPTIMIZATION dari Dokumen 2
 // ========================================
 
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'healthy',
+// Ensure proper indexes for performance
+async function ensureIndexes() {
+    try {
+        // Deposit indexes
+        await Deposit.collection.createIndex({ status: 1, createdAt: -1 });
+        await Deposit.collection.createIndex({ userId: 1, createdAt: -1 });
+        await Deposit.collection.createIndex({ createdAt: -1 });
+        
+        // User indexes
+        await User.collection.createIndex({ email: 1 }, { sparse: true });
+        await User.collection.createIndex({ phone: 1 }, { sparse: true });
+        
+        // Trade indexes
+        await Trade.collection.createIndex({ userId: 1, status: 1, createdAt: -1 });
+        await Trade.collection.createIndex({ status: 1, createdAt: -1 });
+        
+        console.log('✅ Database indexes ensured');
+    } catch (error) {
+        console.error('❌ Error creating indexes:', error);
+    }
+}
+
+// ========================================
+// PUBLIC ROUTES
+// ========================================
+
+// Enhanced root route
+app.get('/', (req, res) => {
+    res.json({
+        message: 'TradeStation Backend API - Best Combined Version',
+        version: '3.2.0',
+        status: 'Running',
         timestamp: new Date().toISOString(),
-        version: '7.6.0-phone-only-online-tracking',
-        cors: 'Enhanced & Secure'
+        environment: process.env.NODE_ENV || 'development',
+        features: [
+            'Enhanced Email/Phone Authentication (Best from Doc 1)',
+            'Robust Admin Panel with Timeouts (Best from Doc 2)',
+            'Performance Optimization for Many Users',
+            'Advanced Monitoring & Debugging',
+            'Mobile-First Trading',
+            'Real-time Chart Data',
+            'Bank Account Management', 
+            'File Upload Support', 
+            'Advanced Admin Trading Control', 
+            'Dynamic Profit Settings',
+            'Enhanced Mobile UI',
+            'Complete Admin Panel',
+            'Enhanced Security & Validation'
+        ],
+        improvements: [
+            'Combined best registration system from Dokumen 1',
+            'Enhanced admin deposit management from Dokumen 2',
+            'Database optimization and monitoring',
+            'Memory usage tracking',
+            'Query timeout handling',
+            'Better error handling for production'
+        ],
+        endpoints: {
+            health: 'GET /api/health',
+            register: 'POST /api/register',
+            login: 'POST /api/login',
+            prices: 'GET /api/prices',
+            chart: 'GET /api/chart/:symbol/:timeframe',
+            profile: 'GET /api/profile (auth required)',
+            bank: 'GET /api/profile/bank (auth required)',
+            trading: 'POST /api/trade (auth required)',
+            admin: '/api/admin/* (admin required)'
+        }
     });
 });
 
+// Enhanced health check
 app.get('/api/health', (req, res) => {
-    const healthData = {
-        status: 'healthy',
+    const health = {
+        status: 'OK', 
+        message: 'TradeStation Backend is running smoothly - Combined Best Version',
         timestamp: new Date().toISOString(),
-        version: '7.6.0-phone-only-online-tracking',
-        uptime: process.uptime(),
-        memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'connecting',
-        environment: process.env.NODE_ENV || 'production',
-        cors: {
-            status: 'Enhanced & Secure',
-            allowedOrigins: allowedOrigins.length,
-            environment: process.env.NODE_ENV
+        environment: process.env.NODE_ENV || 'development',
+        database: {
+            status: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+            readyState: mongoose.connection.readyState
+        },
+        server: {
+            port: process.env.PORT || 3000,
+            uptime: process.uptime(),
+            memory: process.memoryUsage()
         },
         features: {
-            qrisPayment: 'Available',
-            bankTransfer: 'Available',
-            phoneOnlyRegistration: 'Active ✅',
-            onlineUserTracking: 'Active ✅',
-            dailyTokenDistribution: 'Available ✅',
-            manualTokenAddition: 'Available ✅',
-            winRateLogic: 'Fixed and properly controlled',
-            corsConfiguration: 'Enhanced & Secure',
-            adminPanelEndpoints: 'ALL FUNCTIONAL - LENGKAP 100%'
+            chartDataSets: chartDataStore.size,
+            initialized: isInitialized
         }
     };
     
-    res.status(200).json(healthData);
+    const statusCode = mongoose.connection.readyState === 1 ? 200 : 503;
+    res.status(statusCode).json(health);
 });
 
-// ========================================
-// 🏠 MAIN ROUTES - Railway Compatible
-// ========================================
-
-app.get('/', (req, res) => {
-    res.json({
-        message: '🎯 Gosok Angka Backend - Railway v7.6 PHONE ONLY + ONLINE TRACKING',
-        version: '7.6.0-phone-only-online-tracking',
-        status: 'Railway Production Ready - PHONE ONLY REGISTRATION + REALTIME ONLINE USERS ✅',
-        health: 'OK',
-        timestamp: new Date().toISOString(),
-        database: mongoose.connection.readyState === 1 ? 'Connected' : 'Connecting',
-        cors: {
-            status: 'Enhanced & Secure',
-            allowedOrigins: allowedOrigins.length,
-            socketIOCors: 'Configured'
-        },
-        features: {
-            adminPanel: 'Complete & 100% Functional ✅',
-            phoneOnlyRegistration: 'Active - No Email Required ✅',
-            onlineUserTracking: 'Realtime Tracking Active ✅',
-            dailyTokenDistribution: 'Automated Daily Gifts ✅',
-            manualTokenAddition: 'Admin Can Add Tokens ✅',
-            bankTransfer: 'Available',
-            qrisPayment: 'Available & Functional ✅',
-            realTimeSync: true,
-            railwayOptimized: true,
-            healthCheck: true,
-            fileUpload: 'Available',
-            allEndpoints: 'Complete & Tested',
-            winRateControlFixed: 'FIXED ✅',
-            corsConfigurationEnhanced: 'SECURE ✅',
-            adminEndpointsComplete: 'ALL FUNCTIONAL ✅'
-        },
-        note: 'Registration hanya dengan nomor HP, tracking user online realtime, distribusi token harian otomatis',
-        endpoints: {
-            health: '/health',
-            admin: '/api/admin/* (ALL WORKING)',
-            user: '/api/user/*',
-            game: '/api/game/*',
-            public: '/api/public/*',
-            payment: '/api/payment/*',
-            qris: '/api/payment/qris*'
-        }
-    });
-});
-
-// ========================================
-// 🔐 AUTH ROUTES - Complete & Secure (PHONE ONLY)
-// ========================================
-
-// 📱 UPDATED REGISTRATION - Phone Only
-app.post('/api/auth/register', async (req, res) => {
+// Enhanced chart data route
+app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
     try {
-        const { name, phoneNumber, password } = req.body;
-
-        if (!name || !phoneNumber || !password) {
-            return res.status(400).json({ error: 'Nama, nomor HP, dan password wajib diisi' });
+        const { symbol, timeframe } = req.params;
+        
+        console.log(`📊 Chart data requested: ${symbol}/${timeframe}`);
+        
+        // Enhanced validation
+        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+        if (!validTimeframes.includes(timeframe)) {
+            return res.status(400).json({ 
+                error: 'Invalid timeframe',
+                validTimeframes: validTimeframes,
+                provided: timeframe
+            });
         }
-
-        const normalizedPhone = normalizePhoneNumber(phoneNumber);
-        const existingUser = await User.findOne({ phoneNumber: normalizedPhone });
-
-        if (existingUser) {
-            return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+        
+        // Check if symbol exists
+        const priceData = await Price.findOne({ symbol: symbol.toUpperCase() });
+        if (!priceData) {
+            const availableSymbols = await Price.find().distinct('symbol');
+            return res.status(404).json({ 
+                error: 'Symbol not found',
+                availableSymbols: availableSymbols,
+                provided: symbol
+            });
         }
-
-        const hashedPassword = await bcrypt.hash(password, 12);
-
-        const newUser = new User({
-            name: name.trim(),
-            phoneNumber: normalizedPhone,
-            password: hashedPassword,
-            freeScratchesRemaining: 1
-        });
-
-        await newUser.save();
-
-        const token = jwt.sign(
-            { userId: newUser._id, userType: 'user' },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        logger.info('User registered:', formatPhoneNumber(newUser.phoneNumber));
-
-        res.status(201).json({
-            message: 'Registration successful',
-            token,
-            user: {
-                _id: newUser._id,
-                id: newUser._id,
-                name: newUser.name,
-                phoneNumber: formatPhoneNumber(newUser.phoneNumber),
-                scratchCount: 0,
-                winCount: 0,
-                status: 'active',
-                freeScratchesRemaining: 1,
-                paidScratchesRemaining: 0
+        
+        const key = `${symbol.toUpperCase()}-${timeframe}`;
+        let chartData = chartDataStore.get(key);
+        
+        // Enhanced data generation jika belum ada
+        if (!chartData || chartData.length === 0) {
+            console.log(`📊 Generating fresh data for ${symbol}/${timeframe}`);
+            chartData = await generateHistoricalData(symbol.toUpperCase(), timeframe, 100);
+            
+            if (chartData && chartData.length > 0) {
+                chartDataStore.set(key, chartData);
+                console.log(`✅ Fresh data generated: ${chartData.length} candles`);
+            } else {
+                return res.status(500).json({ 
+                    error: 'Failed to generate chart data',
+                    symbol: symbol,
+                    timeframe: timeframe
+                });
             }
-        });
+        }
+        
+        // Enhanced data validation
+        const validatedData = chartData.filter(candle => 
+            candle && 
+            typeof candle.time === 'number' &&
+            typeof candle.open === 'number' &&
+            typeof candle.high === 'number' &&
+            typeof candle.low === 'number' &&
+            typeof candle.close === 'number' &&
+            candle.time > 0 &&
+            candle.open > 0 &&
+            candle.high > 0 &&
+            candle.low > 0 &&
+            candle.close > 0 &&
+            candle.high >= Math.max(candle.open, candle.close) &&
+            candle.low <= Math.min(candle.open, candle.close)
+        );
+        
+        const response = {
+            symbol: symbol.toUpperCase(),
+            timeframe,
+            candlestick: validatedData,
+            count: validatedData.length,
+            currentPrice: priceData.price,
+            lastUpdate: priceData.lastUpdate,
+            metadata: {
+                generated: new Date().toISOString(),
+                source: 'TradeStation API v3.2.0 - Combined Best Version'
+            }
+        };
+        
+        res.json(response);
+        
+        console.log(`✅ Chart data sent: ${validatedData.length} candles for ${symbol}/${timeframe}`);
+        
     } catch (error) {
-        logger.error('Register error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('❌ Chart data error:', error);
+        res.status(500).json({ 
+            error: 'Failed to load chart data',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
-// 📱 UPDATED LOGIN - Phone Only
-app.post('/api/auth/login', authRateLimit, validateUserLogin, async (req, res) => {
+// ========================================
+// AUTH ROUTES - TERBAIK dari Dokumen 1
+// ========================================
+
+// REGISTER ROUTE dengan validasi terbaik dari Dokumen 1
+app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { identifier, password } = req.body;
+        const { name, email, phone, password } = req.body;
         
-        // Normalize identifier (should be phone number now)
-        const normalizedPhone = normalizePhoneNumber(identifier);
+        console.log('📝 Register request:', { name, email: !!email, phone: !!phone, password: !!password });
         
-        // Try to find user by normalized phone or original identifier
-        const user = await User.findOne({
-            phoneNumber: { $in: [identifier, normalizedPhone] }
-        });
-        
-        if (!user) {
-            return res.status(400).json({ error: 'Nomor HP atau password salah' });
+        // Enhanced validation
+        if (!name || name.trim().length < 2) {
+            return res.status(400).json({ error: 'Nama harus minimal 2 karakter' });
+        }
+
+        if (!password || password.length < 6) {
+            return res.status(400).json({ error: 'Password harus minimal 6 karakter' });
+        }
+
+        // PERBAIKAN: User harus punya email ATAU phone (tidak keduanya)
+        if (!email && !phone) {
+            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
         }
         
-        if (user.lockedUntil && user.lockedUntil > new Date()) {
-            const remainingTime = Math.ceil((user.lockedUntil - new Date()) / 1000 / 60);
-            return res.status(423).json({ 
-                error: `Account locked. Coba lagi dalam ${remainingTime} menit.` 
+        // Validasi email jika ada
+        if (email && !isValidEmail(email)) {
+            return res.status(400).json({ error: 'Format email tidak valid' });
+        }
+        
+        // Validasi phone jika ada
+        if (phone && !isValidPhone(phone)) {
+            return res.status(400).json({ error: 'Format nomor HP tidak valid. Gunakan format: 08xxx atau +628xxx' });
+        }
+        
+        // PERBAIKAN: Check existing user dengan logic yang lebih baik
+        let existingUser = null;
+        
+        if (email) {
+            existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+            if (existingUser) {
+                return res.status(400).json({ error: 'Email sudah terdaftar' });
+            }
+        }
+        
+        if (phone) {
+            const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone number
+            existingUser = await User.findOne({ phone: cleanPhone });
+            if (existingUser) {
+                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+            }
+        }
+        
+        // Enhanced password hashing
+        const hashedPassword = await bcrypt.hash(password, 12);
+        
+        // PERBAIKAN: Create user dengan data yang bersih
+        const userData = {
+            name: name.trim(),
+            password: hashedPassword,
+            referralCode: generateReferralCode(),
+            balance: 0,
+            adminSettings: {
+                profitCollapse: 'normal',
+                profitPercentage: 80,
+                forceWin: false,
+                forceWinRate: 0
+            },
+            stats: {
+                totalTrades: 0,
+                winTrades: 0,
+                loseTrades: 0
+            }
+        };
+
+        // PERBAIKAN: Hanya set field yang ada datanya
+        if (email) {
+            userData.email = email.toLowerCase().trim();
+        }
+        if (phone) {
+            userData.phone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone
+        }
+        
+        console.log('📝 Creating user with data:', { 
+            name: userData.name, 
+            email: userData.email, 
+            phone: userData.phone,
+            hasPassword: !!userData.password 
+        });
+        
+        const user = new User(userData);
+        await user.save();
+        
+        // Enhanced activity logging
+        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email || phone}`, req);
+        
+        // Generate token
+        const token = jwt.sign(
+            { userId: user._id },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+        
+        // Remove password from response
+        const userResponse = user.toObject();
+        delete userResponse.password;
+        
+        res.status(201).json({
+            message: 'Pendaftaran berhasil',
+            token,
+            user: userResponse
+        });
+        
+        console.log(`✅ New user registered: ${email || phone}`);
+        
+    } catch (error) {
+        console.error('❌ Registration error:', error);
+        
+        // Handle MongoDB errors
+        if (error.code === 11000) {
+            if (error.keyPattern.email) {
+                return res.status(400).json({ error: 'Email sudah terdaftar' });
+            }
+            if (error.keyPattern.phone) {
+                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+            }
+            return res.status(400).json({ error: 'Data sudah terdaftar' });
+        }
+        
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ 
+                error: 'Data tidak valid', 
+                details: validationErrors 
             });
+        }
+        
+        res.status(500).json({ error: 'Pendaftaran gagal. Silakan coba lagi.' });
+    }
+});
+
+// LOGIN ROUTE dengan validasi terbaik dari Dokumen 1
+app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
+    try {
+        const { email, phone, password } = req.body;
+        
+        console.log('📝 Login request:', { email: !!email, phone: !!phone, password: !!password });
+        
+        if (!password) {
+            return res.status(400).json({ error: 'Password diperlukan' });
+        }
+
+        if (!email && !phone) {
+            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
+        }
+        
+        // PERBAIKAN: Find user dengan logic yang lebih baik
+        let user = null;
+        
+        if (email) {
+            // Coba cari dengan email
+            if (isValidEmail(email)) {
+                user = await User.findOne({ email: email.toLowerCase().trim() });
+            }
+        }
+        
+        if (!user && phone) {
+            // Jika tidak ketemu dengan email, coba dengan phone
+            const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
+            if (isValidPhone(cleanPhone)) {
+                user = await User.findOne({ phone: cleanPhone });
+            }
+        }
+        
+        if (!user) {
+            return res.status(400).json({ error: 'Email/HP atau password salah' });
+        }
+        
+        if (!user.isActive) {
+            return res.status(400).json({ error: 'Akun dinonaktifkan. Hubungi customer service.' });
         }
         
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
-            user.loginAttempts = (user.loginAttempts || 0) + 1;
-            
-            if (user.loginAttempts >= 5) {
-                user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
-            }
-            
-            await user.save();
-            return res.status(400).json({ error: 'Nomor HP atau password salah' });
+            return res.status(400).json({ error: 'Email/HP atau password salah' });
         }
         
-        if (user.loginAttempts || user.lockedUntil) {
-            user.loginAttempts = 0;
-            user.lockedUntil = undefined;
-        }
-        user.lastLoginDate = new Date();
-        user.lastActiveDate = new Date();
-        user.lastOnlineDate = new Date();
+        // Update last login
+        user.lastLoginAt = new Date();
         await user.save();
         
+        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email || phone}`, req);
+        
         const token = jwt.sign(
-            { userId: user._id, userType: 'user' },
+            { userId: user._id },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
         
-        logger.info('User logged in:', formatPhoneNumber(user.phoneNumber));
+        const userResponse = user.toObject();
+        delete userResponse.password;
         
         res.json({
-            message: 'Login successful',
+            message: 'Login berhasil',
             token,
-            user: {
-                _id: user._id,
-                id: user._id,
-                name: user.name,
-                phoneNumber: formatPhoneNumber(user.phoneNumber),
-                scratchCount: user.scratchCount,
-                winCount: user.winCount,
-                status: user.status,
-                lastScratchDate: user.lastScratchDate,
-                freeScratchesRemaining: user.freeScratchesRemaining,
-                paidScratchesRemaining: user.paidScratchesRemaining
-            }
+            user: userResponse
         });
+        
+        console.log(`✅ User logged in: ${email || phone}`);
+        
     } catch (error) {
-        logger.error('Login error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('❌ Login error:', error);
+        res.status(500).json({ error: 'Login gagal. Silakan coba lagi.' });
     }
 });
 
 // ========================================
-// 💳 QRIS PAYMENT ROUTES - COMPLETE IMPLEMENTATION
+// USER ROUTES (tetap sama)
 // ========================================
 
-// 🆕 Serve QRIS Image/QR Code
-app.get('/api/payment/qris', (req, res) => {
+app.get('/api/profile', authenticateToken, async (req, res) => {
     try {
-        const qrImagePath = path.join(__dirname, 'qris_image.png');
-        
-        // Cek apakah file ada
-        if (fs.existsSync(qrImagePath)) {
-            res.sendFile(qrImagePath);
-        } else {
-            // Generate placeholder atau redirect ke QR generator
-            // Untuk demo, kita buat response default
-            res.redirect('https://via.placeholder.com/300x300/667eea/ffffff?text=QRIS+GOSOK+ANGKA');
-        }
+        const user = await User.findById(req.userId).select('-password');
+        res.json(user);
     } catch (error) {
-        logger.error('QRIS image serve error:', error);
-        res.status(404).json({ error: 'QRIS image not found' });
+        console.error('❌ Profile error:', error);
+        res.status(500).json({ error: 'Failed to load profile' });
     }
 });
 
-// 🆕 User Request Token via QRIS
-app.post('/api/payment/qris-request', verifyToken, qrisRateLimit, async (req, res) => {
+app.put('/api/profile', authenticateToken, async (req, res) => {
     try {
-        const { quantity } = req.body;
+        const { name, phone } = req.body;
         
-        if (!quantity || quantity < 1 || quantity > 100) {
-            return res.status(400).json({ error: 'Jumlah token harus antara 1-100' });
+        const updateData = {};
+        if (name && name.trim().length >= 2) {
+            updateData.name = name.trim();
+        }
+        if (phone) {
+            updateData.phone = phone;
         }
         
-        const user = await User.findById(req.userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
+        const user = await User.findByIdAndUpdate(
+            req.userId,
+            updateData,
+            { new: true }
+        ).select('-password');
         
-        // Check QRIS config
-        let qrisConfig = await QRISConfig.findOne();
-        if (!qrisConfig) {
-            qrisConfig = new QRISConfig();
-            await qrisConfig.save();
-        }
+        await logActivity(req.userId, 'PROFILE_UPDATE', 'Profile updated', req);
         
-        if (!qrisConfig.isActive) {
-            return res.status(400).json({ error: 'QRIS payment sedang tidak tersedia' });
-        }
-        
-        const settings = await GameSettings.findOne();
-        const pricePerToken = settings?.scratchTokenPrice || 25000;
-        const totalAmount = pricePerToken * quantity;
-        
-        // Validate amount
-        if (totalAmount < qrisConfig.minAmount || totalAmount > qrisConfig.maxAmount) {
-            return res.status(400).json({ 
-                error: `Total pembayaran harus antara Rp${qrisConfig.minAmount.toLocaleString()} - Rp${qrisConfig.maxAmount.toLocaleString()}` 
-            });
-        }
-        
-        // Generate QRIS transaction
-        const qrisTransactionId = generateQRISTransactionId();
-        const qrisReference = generateQRISReference();
-        
-        const qrisRequest = new TokenPurchase({
-            userId: req.userId,
-            quantity,
-            pricePerToken,
-            totalAmount,
-            paymentStatus: 'pending',
-            paymentMethod: 'qris',
-            notes: `QRIS payment request - Ref: ${qrisReference}`,
-            qrisTransactionId,
-            qrisReference,
-            qrisTimestamp: new Date()
-        });
-        
-        await qrisRequest.save();
-        
-        // Broadcast ke admin
-        socketManager.broadcastQRISRequest({
-            requestId: qrisRequest._id,
-            userId: req.userId,
-            userName: user.name,
-            userPhone: formatPhoneNumber(user.phoneNumber),
-            quantity,
-            totalAmount,
-            pricePerToken,
-            qrisTransactionId,
-            qrisReference,
-            timestamp: qrisRequest.purchaseDate
-        });
-        
-        logger.info(`QRIS request created: ${quantity} tokens by ${user.name} - Ref: ${qrisReference}`);
-        
-        res.json({
-            success: true,
-            message: 'Permintaan QRIS berhasil dibuat',
-            data: {
-                requestId: qrisRequest._id,
-                qrisTransactionId,
-                qrisReference,
-                totalAmount,
-                quantity,
-                pricePerToken,
-                instructions: qrisConfig.instructions
-            }
-        });
+        res.json(user);
     } catch (error) {
-        logger.error('QRIS request error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('❌ Profile update error:', error);
+        res.status(500).json({ error: 'Failed to update profile' });
     }
 });
 
-// 🆕 Get QRIS Configuration (Public)
-app.get('/api/payment/qris-config', async (req, res) => {
+// Bank Data Routes
+app.get('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
-        let qrisConfig = await QRISConfig.findOne();
-        if (!qrisConfig) {
-            qrisConfig = new QRISConfig();
-            await qrisConfig.save();
-        }
-        
-        const settings = await GameSettings.findOne();
-        
-        res.json({
-            isActive: qrisConfig.isActive,
-            merchantName: qrisConfig.merchantName,
-            qrisImageUrl: qrisConfig.qrisImageUrl,
-            instructions: qrisConfig.instructions,
-            pricePerToken: settings?.scratchTokenPrice || 25000,
-            minAmount: qrisConfig.minAmount,
-            maxAmount: qrisConfig.maxAmount
-        });
+        const user = await User.findById(req.userId).select('bankData');
+        res.json(user.bankData || {});
     } catch (error) {
-        logger.error('Get QRIS config error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Failed to load bank data' });
     }
 });
 
-// 🆕 Check QRIS Payment Status
-app.get('/api/payment/qris-status/:requestId', verifyToken, async (req, res) => {
+app.put('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
-        const { requestId } = req.params;
+        const { bankName, accountNumber, accountHolder } = req.body;
         
-        const qrisRequest = await TokenPurchase.findOne({
-            _id: requestId,
-            userId: req.userId,
-            paymentMethod: 'qris'
-        });
-        
-        if (!qrisRequest) {
-            return res.status(404).json({ error: 'QRIS request tidak ditemukan' });
+        if (!bankName || !accountNumber || !accountHolder) {
+            return res.status(400).json({ error: 'All bank data fields are required' });
         }
         
-        res.json({
-            requestId: qrisRequest._id,
-            status: qrisRequest.paymentStatus,
-            quantity: qrisRequest.quantity,
-            totalAmount: qrisRequest.totalAmount,
-            qrisReference: qrisRequest.qrisReference,
-            createdAt: qrisRequest.purchaseDate,
-            completedAt: qrisRequest.completedDate
-        });
-    } catch (error) {
-        logger.error('QRIS status check error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ========================================
-// 👨‍💼 COMPLETE ADMIN ROUTES - ALL FUNCTIONAL + ONLINE USERS + MANUAL TOKENS
-// ========================================
-
-// Admin Login
-app.post('/api/admin/login', authRateLimit, validateAdminLogin, async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        
-        const admin = await Admin.findOne({ username, isActive: true });
-        if (!admin) {
-            return res.status(400).json({ error: 'Username atau password salah' });
-        }
-        
-        if (admin.lockedUntil && admin.lockedUntil > new Date()) {
-            const remainingTime = Math.ceil((admin.lockedUntil - new Date()) / 1000 / 60);
-            return res.status(423).json({ 
-                error: `Admin account locked. Coba lagi dalam ${remainingTime} menit.` 
-            });
-        }
-        
-        const isValidPassword = await bcrypt.compare(password, admin.password);
-        if (!isValidPassword) {
-            admin.loginAttempts = (admin.loginAttempts || 0) + 1;
-            
-            if (admin.loginAttempts >= 5) {
-                admin.lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
-            }
-            
-            await admin.save();
-            return res.status(400).json({ error: 'Username atau password salah' });
-        }
-        
-        if (admin.loginAttempts || admin.lockedUntil) {
-            admin.loginAttempts = 0;
-            admin.lockedUntil = undefined;
-        }
-        admin.lastLoginDate = new Date();
-        await admin.save();
-        
-        const token = jwt.sign(
-            { userId: admin._id, userType: 'admin' },
-            process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+        const user = await User.findByIdAndUpdate(
+            req.userId,
+            { 
+                bankData: { 
+                    bankName: bankName.trim(), 
+                    accountNumber: accountNumber.trim(), 
+                    accountHolder: accountHolder.trim() 
+                }
+            },
+            { new: true }
         );
         
-        logger.info('Admin logged in:', admin.username);
+        await logActivity(req.userId, 'BANK_DATA_UPDATE', `Bank data updated: ${bankName}`, req);
         
-        res.json({
-            message: 'Login successful',
-            token,
-            admin: {
-                _id: admin._id,
-                id: admin._id,
-                name: admin.name,
-                username: admin.username,
-                role: admin.role,
-                permissions: admin.permissions
-            }
+        res.json(user.bankData);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update bank data' });
+    }
+});
+
+// Active Bank Accounts untuk Deposit
+app.get('/api/bank-accounts/active', async (req, res) => {
+    try {
+        const accounts = await BankAccount.find({ isActive: true }).select('-__v');
+        res.json(accounts);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to load bank accounts' });
+    }
+});
+
+// Price Routes
+app.get('/api/prices', async (req, res) => {
+    try {
+        const prices = await Price.find().sort({ symbol: 1 }).select('-__v');
+        res.json(prices);
+    } catch (error) {
+        console.error('❌ Prices error:', error);
+        res.status(500).json({ error: 'Failed to load prices' });
+    }
+});
+
+// ========================================
+// TRADING ROUTES (tetap sama)
+// ========================================
+
+// Enhanced trading route
+app.post('/api/trade', authenticateToken, async (req, res) => {
+    try {
+        const { symbol, direction, amount, duration } = req.body;
+        
+        // Enhanced validation
+        if (!symbol || !direction || !amount || !duration) {
+            return res.status(400).json({ error: 'All fields are required' });
+        }
+        
+        if (!['buy', 'sell'].includes(direction)) {
+            return res.status(400).json({ error: 'Direction must be buy or sell' });
+        }
+        
+        if (amount < 500000 || amount > 100000000) {
+            return res.status(400).json({ error: 'Amount must be between Rp 500,000 and Rp 100,000,000' });
+        }
+        
+        if (duration < 30 || duration > 300) {
+            return res.status(400).json({ error: 'Duration must be between 30 and 300 seconds' });
+        }
+        
+        if (amount > req.user.balance) {
+            return res.status(400).json({ error: 'Insufficient balance' });
+        }
+        
+        // Get current price
+        const currentPrice = await Price.findOne({ symbol: symbol.toUpperCase() });
+        if (!currentPrice || !currentPrice.price || currentPrice.price <= 0) {
+            return res.status(400).json({ error: 'Invalid symbol or price not available' });
+        }
+        
+        // Get profit percentage dari user settings dengan validation
+        const profitPercentage = Math.max(20, Math.min(100, 
+            req.user.adminSettings?.profitPercentage || 80
+        ));
+        
+        // Deduct amount from user balance
+        req.user.balance -= amount;
+        await req.user.save();
+        
+        // Create trade dengan enhanced settings
+        const trade = new Trade({
+            userId: req.userId,
+            symbol: symbol.toUpperCase(),
+            direction,
+            amount,
+            profitPercentage,
+            duration,
+            entryPrice: currentPrice.price
         });
-    } catch (error) {
-        logger.error('Admin login error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Test Auth
-app.get('/api/admin/test-auth', verifyToken, verifyAdmin, (req, res) => {
-    res.json({ 
-        message: 'Authentication valid', 
-        adminId: req.userId,
-        timestamp: new Date().toISOString(),
-        cors: 'Enhanced & Working'
-    });
-});
-
-// Change Password
-app.post('/api/admin/change-password', verifyToken, verifyAdmin, async (req, res) => {
-    try {
-        const { oldPassword, newPassword } = req.body;
         
-        if (!oldPassword || !newPassword) {
-            return res.status(400).json({ error: 'Password lama dan baru diperlukan' });
-        }
+        await trade.save();
         
-        if (newPassword.length < 6) {
-            return res.status(400).json({ error: 'Password baru minimal 6 karakter' });
-        }
+        // Enhanced activity logging
+        await logActivity(
+            req.userId, 
+            'TRADE_CREATED', 
+            `${symbol.toUpperCase()} ${direction.toUpperCase()} ${formatCurrency(amount)} - ${duration}s`,
+            req
+        );
         
-        const admin = await Admin.findById(req.userId);
-        if (!admin) {
-            return res.status(404).json({ error: 'Admin tidak ditemukan' });
-        }
-        
-        const isValidPassword = await bcrypt.compare(oldPassword, admin.password);
-        if (!isValidPassword) {
-            return res.status(400).json({ error: 'Password lama salah' });
-        }
-        
-        const hashedPassword = await bcrypt.hash(newPassword, 12);
-        admin.password = hashedPassword;
-        await admin.save();
-        
-        logger.info('Admin password changed:', admin.username);
-        
-        res.json({ message: 'Password berhasil diubah' });
-    } catch (error) {
-        logger.error('Change password error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// 🆕 ENHANCED DASHBOARD - With Online Users
-app.get('/api/admin/dashboard', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        const [
-            totalUsers, 
-            todayScratches, 
-            todayWinners, 
-            totalPrizesResult, 
-            pendingPurchases,
-            pendingQRIS,
-            activeUsers
-        ] = await Promise.all([
-            User.countDocuments(),
-            Scratch.countDocuments({ scratchDate: { $gte: today } }),
-            Winner.countDocuments({ scratchDate: { $gte: today } }),
-            Winner.aggregate([
-                { $match: { claimStatus: 'completed' } },
-                { $lookup: {
-                    from: 'prizes',
-                    localField: 'prizeId',
-                    foreignField: '_id',
-                    as: 'prize'
-                }},
-                { $unwind: '$prize' },
-                { $group: {
-                    _id: null,
-                    total: { $sum: '$prize.value' }
-                }}
-            ]),
-            TokenPurchase.countDocuments({ paymentStatus: 'pending', paymentMethod: 'bank' }),
-            TokenPurchase.countDocuments({ paymentStatus: 'pending', paymentMethod: 'qris' }),
-            User.countDocuments({ 
-                lastActiveDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-            })
-        ]);
-        
-        // Get online users data
-        const onlineUsersData = getOnlineUsers();
-        
-        const dashboardData = {
-            totalUsers,
-            todayScratches,
-            todayWinners,
-            totalPrizes: totalPrizesResult[0]?.total || 0,
-            pendingPurchases,
-            pendingQRIS,
-            activeUsers,
-            // 🆕 Online users data
-            onlineUsers: onlineUsersData,
-            systemHealth: {
-                memoryUsage: process.memoryUsage(),
-                uptime: process.uptime(),
-                socketConnections: io.engine.clientsCount || 0,
-                cors: 'Enhanced & Secure'
+        // Notify via socket
+        io.to(req.userId.toString()).emit('tradeCreated', {
+            trade: {
+                _id: trade._id,
+                symbol: trade.symbol,
+                direction: trade.direction,
+                amount: trade.amount,
+                duration: trade.duration,
+                entryPrice: trade.entryPrice,
+                profitPercentage: trade.profitPercentage
             },
-            analytics: {
-                winRate: todayScratches > 0 ? ((todayWinners / todayScratches) * 100).toFixed(2) : 0,
-                averageWinValue: totalPrizesResult[0]?.total && todayWinners > 0 ? 
-                    (totalPrizesResult[0].total / todayWinners).toFixed(0) : 0
+            newBalance: req.user.balance
+        });
+        
+        res.status(201).json({
+            message: 'Trade created successfully',
+            trade: {
+                _id: trade._id,
+                symbol: trade.symbol,
+                direction: trade.direction,
+                amount: trade.amount,
+                duration: trade.duration,
+                entryPrice: trade.entryPrice,
+                profitPercentage: trade.profitPercentage,
+                status: trade.status,
+                createdAt: trade.createdAt
             },
-            features: {
-                phoneOnlyRegistration: 'Active ✅',
-                onlineUserTracking: 'Active ✅',
-                dailyTokenDistribution: 'Available ✅',
-                manualTokenAddition: 'Available ✅'
-            }
-        };
+            newBalance: req.user.balance
+        });
         
-        res.json(dashboardData);
+        console.log(`✅ Trade created: ${trade.symbol} ${trade.direction} ${formatCurrency(trade.amount)}`);
+        
     } catch (error) {
-        logger.error('Dashboard error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
+        console.error('❌ Trade error:', error);
+        res.status(500).json({ error: 'Failed to create trade' });
     }
 });
 
-// 🆕 Get Online Users (Real-time)
-app.get('/api/admin/online-users', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
+app.get('/api/trades', authenticateToken, async (req, res) => {
     try {
-        const onlineUsersData = getOnlineUsers();
-        res.json(onlineUsersData);
-    } catch (error) {
-        logger.error('Get online users error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 👥 ADMIN USERS MANAGEMENT - COMPLETE + PHONE DISPLAY
-// ========================================
-
-app.get('/api/admin/users', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { page = 1, limit = 10, search = '', status = 'all' } = req.query;
+        const { limit = 50, status } = req.query;
         
-        let query = {};
-        
-        if (status !== 'all') {
+        let query = { userId: req.userId };
+        if (status && ['active', 'completed', 'cancelled'].includes(status)) {
             query.status = status;
         }
         
-        if (search) {
-            query.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { phoneNumber: { $regex: search, $options: 'i' } }
-            ];
-        }
-        
-        const users = await User.find(query)
-            .select('-password')
+        const trades = await Trade.find(query)
             .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
-            
-        const total = await User.countDocuments(query);
+            .limit(Math.min(parseInt(limit), 100))
+            .select('-__v');
         
-        // Format phone numbers for display
-        const formattedUsers = users.map(user => ({
-            ...user.toObject(),
-            phoneNumber: formatPhoneNumber(user.phoneNumber)
-        }));
-        
-        res.json({
-            users: formattedUsers,
-            total,
-            page: parseInt(page),
-            limit: parseInt(limit),
-            totalPages: Math.ceil(total / limit)
-        });
+        res.json({ trades });
     } catch (error) {
-        logger.error('Get users error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
+        console.error('❌ Trades error:', error);
+        res.status(500).json({ error: 'Failed to load trades' });
     }
 });
 
-app.get('/api/admin/users/:userId', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        
-        const user = await User.findById(userId).select('-password');
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        // Get user statistics
-        const [totalScratches, totalWins, scratches] = await Promise.all([
-            Scratch.countDocuments({ userId }),
-            Scratch.countDocuments({ userId, isWin: true }),
-            Scratch.find({ userId })
-                .populate('prizeId')
-                .sort({ scratchDate: -1 })
-                .limit(20)
-        ]);
-        
-        const winRate = totalScratches > 0 ? ((totalWins / totalScratches) * 100).toFixed(2) : 0;
-        
-        res.json({
-            user: {
-                ...user.toObject(),
-                phoneNumber: formatPhoneNumber(user.phoneNumber)
-            },
-            stats: {
-                totalScratches,
-                totalWins,
-                winRate: parseFloat(winRate)
-            },
-            scratches
-        });
-    } catch (error) {
-        logger.error('Get user detail error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
+// ========================================
+// DEPOSIT ROUTES (tetap sama)
+// ========================================
 
-app.post('/api/admin/users/:userId/reset-password', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
+app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
-        const { userId } = req.params;
-        const { newPassword } = req.body;
+        const { amount, receipt, fileName, fileType, bankFrom } = req.body;
         
-        if (!newPassword || newPassword.length < 6) {
-            return res.status(400).json({ error: 'Password baru minimal 6 karakter' });
+        if (!amount || amount < 500000) {
+            return res.status(400).json({ error: 'Minimum deposit is Rp 500,000' });
         }
         
-        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        if (!receipt) {
+            return res.status(400).json({ error: 'Payment proof is required' });
+        }
         
-        const user = await User.findByIdAndUpdate(userId, {
-            password: hashedPassword,
-            loginAttempts: 0,
-            lockedUntil: undefined
+        // Enhanced file validation
+        const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+        if (!allowedTypes.includes(fileType)) {
+            return res.status(400).json({ error: 'Invalid file type. Only JPEG, PNG, and WebP are allowed.' });
+        }
+        
+        // Check file size (base64 length estimation)
+        const sizeInBytes = (receipt.length * 3) / 4;
+        if (sizeInBytes > 5 * 1024 * 1024) { // 5MB limit
+            return res.status(400).json({ error: 'File size too large. Maximum 5MB allowed.' });
+        }
+        
+        const deposit = new Deposit({
+            userId: req.userId,
+            amount,
+            bankFrom: bankFrom || 'Not specified',
+            receipt,
+            fileName: fileName || 'payment_proof',
+            fileType,
+            fileSize: sizeInBytes,
+            transferTime: new Date()
         });
         
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
+        await deposit.save();
         
-        logger.info(`Password reset for user: ${formatPhoneNumber(user.phoneNumber)} by admin: ${req.userId}`);
+        await logActivity(req.userId, 'DEPOSIT_REQUEST', `Deposit request: ${formatCurrency(amount)}`, req);
         
-        res.json({ message: 'Password user berhasil direset' });
-    } catch (error) {
-        logger.error('Reset password error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/users/:userId/status', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { status } = req.body;
-        
-        if (!['active', 'inactive', 'suspended', 'banned'].includes(status)) {
-            return res.status(400).json({ error: 'Status tidak valid' });
-        }
-        
-        const user = await User.findByIdAndUpdate(userId, {
-            status: status
-        }, { new: true });
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        logger.info(`User status updated: ${user.name} to ${status} by admin: ${req.userId}`);
-        
-        res.json({ 
-            message: 'Status user berhasil diupdate',
-            user: {
-                id: user._id,
-                name: user.name,
-                status: user.status
+        res.status(201).json({
+            message: 'Deposit request submitted successfully',
+            deposit: {
+                _id: deposit._id,
+                amount: deposit.amount,
+                method: deposit.method,
+                status: deposit.status,
+                createdAt: deposit.createdAt
             }
         });
+        
+        console.log(`✅ Deposit request: ${formatCurrency(amount)} from user ${req.user.name}`);
+        
     } catch (error) {
-        logger.error('Update user status error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
+        console.error('❌ Deposit error:', error);
+        res.status(500).json({ error: 'Failed to submit deposit' });
     }
 });
 
-app.put('/api/admin/users/:userId/win-rate', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
+app.get('/api/deposits', authenticateToken, async (req, res) => {
     try {
-        const { userId } = req.params;
-        const { winRate } = req.body;
+        const deposits = await Deposit.find({ userId: req.userId })
+            .sort({ createdAt: -1 })
+            .select('-receipt') // Don't send receipt data in list
+            .limit(50);
         
-        if (winRate !== null && (winRate < 0 || winRate > 100)) {
-            return res.status(400).json({ error: 'Win rate harus antara 0-100 atau null' });
-        }
-        
-        const user = await User.findByIdAndUpdate(userId, {
-            customWinRate: winRate
-        }, { new: true });
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        logger.info(`Win rate updated for user: ${user.name} to ${winRate}% by admin: ${req.userId}`);
-        
-        res.json({ 
-            message: 'Win rate berhasil diupdate',
-            user: {
-                id: user._id,
-                name: user.name,
-                customWinRate: user.customWinRate
-            }
-        });
+        res.json(deposits);
     } catch (error) {
-        logger.error('Update win rate error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
+        console.error('❌ Deposits error:', error);
+        res.status(500).json({ error: 'Failed to load deposits' });
     }
 });
 
-app.put('/api/admin/users/:userId/forced-winning', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { winningNumber } = req.body;
-        
-        if (winningNumber && !/^\d{4}$/.test(winningNumber)) {
-            return res.status(400).json({ error: 'Winning number harus 4 digit atau null' });
-        }
-        
-        // Check if winning number exists and has stock
-        if (winningNumber) {
-            const prize = await Prize.findOne({ 
-                winningNumber,
-                isActive: true,
-                stock: { $gt: 0 }
-            });
-            
-            if (!prize) {
-                return res.status(400).json({ error: 'Winning number tidak valid atau stok habis' });
-            }
-        }
-        
-        const user = await User.findByIdAndUpdate(userId, {
-            forcedWinningNumber: winningNumber
-        }, { new: true });
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        logger.info(`Forced winning updated for user: ${user.name} to ${winningNumber} by admin: ${req.userId}`);
-        
-        res.json({ 
-            message: winningNumber ? 'Forced winning number berhasil diset' : 'Forced winning number berhasil dihapus',
-            user: {
-                id: user._id,
-                name: user.name,
-                forcedWinningNumber: user.forcedWinningNumber
-            }
-        });
-    } catch (error) {
-        logger.error('Update forced winning error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
+// ========================================
+// WITHDRAWAL ROUTES (tetap sama)
+// ========================================
 
-app.put('/api/admin/users/:userId/balance', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
+app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
-        const { userId } = req.params;
-        const { freeScratchesRemaining, paidScratchesRemaining } = req.body;
+        const { amount } = req.body;
         
-        if (freeScratchesRemaining < 0 || paidScratchesRemaining < 0) {
-            return res.status(400).json({ error: 'Balance tidak boleh negatif' });
+        if (!amount || amount < 100000) {
+            return res.status(400).json({ error: 'Minimum withdrawal is Rp 100,000' });
         }
         
-        const user = await User.findByIdAndUpdate(userId, {
-            freeScratchesRemaining: freeScratchesRemaining || 0,
-            paidScratchesRemaining: paidScratchesRemaining || 0
-        }, { new: true });
+        const user = await User.findById(req.userId);
         
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
+        if (amount > user.balance) {
+            return res.status(400).json({ error: 'Insufficient balance' });
         }
         
-        logger.info(`User balance updated: ${user.name} - Free: ${freeScratchesRemaining}, Paid: ${paidScratchesRemaining} by admin: ${req.userId}`);
-        
-        res.json({ 
-            message: 'Balance user berhasil diupdate',
-            user: {
-                id: user._id,
-                name: user.name,
-                freeScratchesRemaining: user.freeScratchesRemaining,
-                paidScratchesRemaining: user.paidScratchesRemaining
-            }
-        });
-    } catch (error) {
-        logger.error('Update user balance error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// 🆕 MANUAL TOKEN ADDITION - Admin dapat tambah token langsung
-app.post('/api/admin/add-tokens-manual', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { userId, freeTokens = 0, paidTokens = 0, notes } = req.body;
-        
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID diperlukan' });
+        if (!user.bankData || !user.bankData.bankName) {
+            return res.status(400).json({ error: 'Bank data is required. Please update your bank information first.' });
         }
         
-        if (freeTokens < 0 || paidTokens < 0) {
-            return res.status(400).json({ error: 'Jumlah token tidak boleh negatif' });
+        // Enhanced fee calculation
+        const feePercentage = 0.01; // 1%
+        const minimumFee = 6500;
+        const fee = Math.max(minimumFee, amount * feePercentage);
+        const finalAmount = amount - fee;
+        
+        if (finalAmount <= 0) {
+            return res.status(400).json({ error: 'Amount too small after fees' });
         }
         
-        if (freeTokens === 0 && paidTokens === 0) {
-            return res.status(400).json({ error: 'Minimal salah satu jenis token harus ditambahkan' });
-        }
-        
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        // Update user balance
-        user.freeScratchesRemaining = (user.freeScratchesRemaining || 0) + freeTokens;
-        user.paidScratchesRemaining = (user.paidScratchesRemaining || 0) + paidTokens;
+        // Deduct amount from user balance
+        user.balance -= amount;
         await user.save();
         
-        // Create purchase record for tracking
-        if (freeTokens > 0 || paidTokens > 0) {
-            const purchase = new TokenPurchase({
-                userId,
-                adminId: req.userId,
-                quantity: freeTokens + paidTokens,
-                pricePerToken: 0,
-                totalAmount: 0,
-                paymentStatus: 'completed',
-                paymentMethod: 'manual',
-                notes: notes || `Manual token addition by admin - Free: ${freeTokens}, Paid: ${paidTokens}`,
-                completedDate: new Date()
-            });
-            
-            await purchase.save();
-        }
-        
-        // Broadcast token update
-        socketManager.broadcastTokenPurchase({
-            userId: user._id,
-            quantity: freeTokens + paidTokens,
-            newBalance: {
-                free: user.freeScratchesRemaining,
-                paid: user.paidScratchesRemaining,
-                total: user.freeScratchesRemaining + user.paidScratchesRemaining
+        const withdrawal = new Withdrawal({
+            userId: req.userId,
+            amount,
+            fee,
+            finalAmount,
+            bankAccount: {
+                bankName: user.bankData.bankName,
+                accountNumber: user.bankData.accountNumber,
+                accountHolder: user.bankData.accountHolder
             }
         });
         
-        logger.info(`Manual tokens added: ${freeTokens} free + ${paidTokens} paid tokens for ${user.name} by admin: ${req.userId}`);
+        await withdrawal.save();
         
-        res.json({
-            success: true,
-            message: 'Token berhasil ditambahkan secara manual',
-            tokensAdded: {
-                free: freeTokens,
-                paid: paidTokens,
-                total: freeTokens + paidTokens
+        await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal request: ${formatCurrency(amount)} (net: ${formatCurrency(finalAmount)})`, req);
+        
+        res.status(201).json({
+            message: 'Withdrawal request submitted successfully',
+            withdrawal: {
+                _id: withdrawal._id,
+                amount: withdrawal.amount,
+                fee: withdrawal.fee,
+                finalAmount: withdrawal.finalAmount,
+                bankAccount: withdrawal.bankAccount,
+                status: withdrawal.status,
+                createdAt: withdrawal.createdAt
             },
-            userBalance: {
-                free: user.freeScratchesRemaining,
-                paid: user.paidScratchesRemaining,
-                total: user.freeScratchesRemaining + user.paidScratchesRemaining
-            }
+            newBalance: user.balance
         });
+        
+        console.log(`✅ Withdrawal request: ${formatCurrency(amount)} from user ${user.name}`);
+        
     } catch (error) {
-        logger.error('Manual token addition error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
+        console.error('❌ Withdrawal error:', error);
+        res.status(500).json({ error: 'Failed to submit withdrawal' });
     }
 });
 
-// 🆕 DAILY TOKEN DISTRIBUTION - Manual Trigger
-app.post('/api/admin/distribute-daily-tokens', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
+app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     try {
-        const { force = false } = req.body;
+        const withdrawals = await Withdrawal.find({ userId: req.userId })
+            .sort({ createdAt: -1 })
+            .limit(50);
         
-        const settings = await GameSettings.findOne();
-        if (!settings) {
-            return res.status(404).json({ error: 'Game settings tidak ditemukan' });
-        }
+        res.json(withdrawals);
+    } catch (error) {
+        console.error('❌ Withdrawals error:', error);
+        res.status(500).json({ error: 'Failed to load withdrawals' });
+    }
+});
+
+// ========================================
+// ADMIN ROUTES - TERBAIK dari Dokumen 2
+// ========================================
+
+// Enhanced Admin Dashboard
+app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        // Enhanced statistics calculation
+        const [
+            totalUsers,
+            activeUsers,
+            totalTrades,
+            activeTrades,
+            totalDeposits,
+            pendingDeposits,
+            totalWithdrawals,
+            pendingWithdrawals,
+            totalBankAccounts,
+            activeBankAccounts
+        ] = await Promise.all([
+            User.countDocuments(),
+            User.countDocuments({ isActive: true }),
+            Trade.countDocuments(),
+            Trade.countDocuments({ status: 'active' }),
+            Deposit.countDocuments(),
+            Deposit.countDocuments({ status: 'pending' }),
+            Withdrawal.countDocuments(),
+            Withdrawal.countDocuments({ status: 'pending' }),
+            BankAccount.countDocuments(),
+            BankAccount.countDocuments({ isActive: true })
+        ]);
         
-        if (!settings.dailyTokenDistribution) {
-            return res.status(400).json({ error: 'Daily token distribution sedang dinonaktifkan' });
-        }
+        // Enhanced volume stats
+        const completedTrades = await Trade.find({ status: 'completed' });
+        const totalVolume = completedTrades.reduce((sum, trade) => sum + trade.amount, 0);
         
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        
-        // Check if already distributed today (unless forced)
-        if (!force && settings.lastDistributionDate && settings.lastDistributionDate >= today) {
-            return res.status(400).json({ 
-                error: 'Daily tokens sudah didistribusikan hari ini. Gunakan force=true untuk paksa distribute.' 
-            });
-        }
-        
-        const distributionData = await distributeDailyTokens();
-        
-        res.json({
-            success: true,
-            message: 'Daily token distribution berhasil dijalankan',
-            data: distributionData
+        const todayTrades = await Trade.find({ 
+            status: 'completed',
+            createdAt: { $gte: today }
         });
-    } catch (error) {
-        logger.error('Manual daily token distribution error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 🎁 ADMIN PRIZES MANAGEMENT - COMPLETE
-// ========================================
-
-app.get('/api/admin/prizes', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const prizes = await Prize.find()
-            .sort({ priority: -1, createdAt: -1 });
-        res.json(prizes);
-    } catch (error) {
-        logger.error('Get admin prizes error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.post('/api/admin/prizes', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { winningNumber, name, type, value, stock, description, category, priority } = req.body;
-        
-        if (!winningNumber || !name || !type || !value || stock === undefined) {
-            return res.status(400).json({ error: 'Field wajib harus diisi' });
-        }
-        
-        if (!/^\d{4}$/.test(winningNumber)) {
-            return res.status(400).json({ error: 'Winning number harus 4 digit' });
-        }
-        
-        // Check if winning number already exists
-        const existingPrize = await Prize.findOne({ winningNumber });
-        if (existingPrize) {
-            return res.status(400).json({ error: 'Winning number sudah digunakan' });
-        }
-        
-        const prize = new Prize({
-            winningNumber,
-            name,
-            type,
-            value: parseInt(value),
-            stock: parseInt(stock),
-            originalStock: parseInt(stock),
-            description,
-            category: category || 'general',
-            priority: parseInt(priority) || 0,
-            isActive: true
-        });
-        
-        await prize.save();
-        
-        socketManager.broadcastPrizeUpdate({
-            type: 'prize_added',
-            prize: prize
-        });
-        
-        logger.info(`Prize added: ${name} (${winningNumber}) by admin: ${req.userId}`);
-        
-        res.status(201).json({
-            message: 'Prize berhasil ditambahkan',
-            prize
-        });
-    } catch (error) {
-        logger.error('Add prize error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/prizes/:prizeId', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { prizeId } = req.params;
-        const updateData = req.body;
-        
-        if (updateData.winningNumber && !/^\d{4}$/.test(updateData.winningNumber)) {
-            return res.status(400).json({ error: 'Winning number harus 4 digit' });
-        }
-        
-        // Check if new winning number already exists (exclude current prize)
-        if (updateData.winningNumber) {
-            const existingPrize = await Prize.findOne({ 
-                winningNumber: updateData.winningNumber,
-                _id: { $ne: prizeId }
-            });
-            if (existingPrize) {
-                return res.status(400).json({ error: 'Winning number sudah digunakan' });
-            }
-        }
-        
-        const prize = await Prize.findByIdAndUpdate(prizeId, updateData, { new: true });
-        
-        if (!prize) {
-            return res.status(404).json({ error: 'Prize tidak ditemukan' });
-        }
-        
-        socketManager.broadcastPrizeUpdate({
-            type: 'prize_updated',
-            prize: prize
-        });
-        
-        logger.info(`Prize updated: ${prize.name} by admin: ${req.userId}`);
-        
-        res.json({
-            message: 'Prize berhasil diupdate',
-            prize
-        });
-    } catch (error) {
-        logger.error('Update prize error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.delete('/api/admin/prizes/:prizeId', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { prizeId } = req.params;
-        
-        // Check if prize has been won
-        const hasWinners = await Winner.countDocuments({ prizeId });
-        if (hasWinners > 0) {
-            return res.status(400).json({ 
-                error: 'Prize tidak dapat dihapus karena sudah ada pemenang' 
-            });
-        }
-        
-        const prize = await Prize.findByIdAndDelete(prizeId);
-        
-        if (!prize) {
-            return res.status(404).json({ error: 'Prize tidak ditemukan' });
-        }
-        
-        socketManager.broadcastPrizeUpdate({
-            type: 'prize_deleted',
-            prizeId: prizeId
-        });
-        
-        logger.info(`Prize deleted: ${prize.name} by admin: ${req.userId}`);
-        
-        res.json({ message: 'Prize berhasil dihapus' });
-    } catch (error) {
-        logger.error('Delete prize error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// ⚙️ ADMIN GAME SETTINGS - COMPLETE + DAILY TOKEN SETTINGS
-// ========================================
-
-app.get('/api/admin/game-settings', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        let settings = await GameSettings.findOne();
-        if (!settings) {
-            settings = new GameSettings();
-            await settings.save();
-        }
-        res.json(settings);
-    } catch (error) {
-        logger.error('Get game settings error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/game-settings', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const updateData = { ...req.body, lastUpdated: new Date() };
-        
-        const settings = await GameSettings.findOneAndUpdate(
-            {},
-            updateData,
-            { new: true, upsert: true }
-        );
-        
-        socketManager.broadcastSettingsUpdate({
-            settings: settings
-        });
-        
-        logger.info('Game settings updated by admin:', req.userId);
-        
-        res.json({
-            message: 'Game settings berhasil diupdate',
-            settings
-        });
-    } catch (error) {
-        logger.error('Update game settings error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 🏆 ADMIN WINNERS MANAGEMENT - COMPLETE
-// ========================================
-
-app.get('/api/admin/recent-winners', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { limit = 50 } = req.query;
-        
-        const winners = await Winner.find()
-            .populate('userId', 'name phoneNumber')
-            .populate('prizeId', 'name value type winningNumber')
-            .populate('scratchId', 'scratchNumber')
-            .sort({ scratchDate: -1 })
-            .limit(parseInt(limit));
-            
-        // Format phone numbers
-        const formattedWinners = winners.map(winner => ({
-            ...winner.toObject(),
-            userId: {
-                ...winner.userId.toObject(),
-                phoneNumber: formatPhoneNumber(winner.userId.phoneNumber)
-            }
-        }));
-            
-        res.json(formattedWinners);
-    } catch (error) {
-        logger.error('Get recent winners error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.get('/api/admin/winners', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { page = 1, limit = 20, status = 'all' } = req.query;
-        
-        let query = {};
-        if (status !== 'all') {
-            query.claimStatus = status;
-        }
-        
-        const winners = await Winner.find(query)
-            .populate('userId', 'name phoneNumber')
-            .populate('prizeId', 'name value type winningNumber')
-            .populate('scratchId', 'scratchNumber')
-            .sort({ scratchDate: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
-            
-        const total = await Winner.countDocuments(query);
-        
-        // Format phone numbers
-        const formattedWinners = winners.map(winner => ({
-            ...winner.toObject(),
-            userId: {
-                ...winner.userId.toObject(),
-                phoneNumber: formatPhoneNumber(winner.userId.phoneNumber)
-            }
-        }));
-        
-        res.json({
-            winners: formattedWinners,
-            total,
-            page: parseInt(page),
-            limit: parseInt(limit),
-            totalPages: Math.ceil(total / limit)
-        });
-    } catch (error) {
-        logger.error('Get winners error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/winners/:winnerId/claim-status', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { winnerId } = req.params;
-        const { claimStatus } = req.body;
-        
-        if (!['pending', 'completed', 'expired'].includes(claimStatus)) {
-            return res.status(400).json({ error: 'Status klaim tidak valid' });
-        }
-        
-        const updateData = { claimStatus };
-        if (claimStatus === 'completed') {
-            updateData.claimDate = new Date();
-        }
-        
-        const winner = await Winner.findByIdAndUpdate(winnerId, updateData, { new: true })
-            .populate('userId', 'name phoneNumber')
-            .populate('prizeId', 'name value');
-        
-        if (!winner) {
-            return res.status(404).json({ error: 'Winner tidak ditemukan' });
-        }
-        
-        logger.info(`Winner claim status updated: ${winner.prizeId.name} for ${winner.userId.name} to ${claimStatus}`);
-        
-        res.json({
-            message: 'Status klaim berhasil diupdate',
-            winner
-        });
-    } catch (error) {
-        logger.error('Update winner claim status error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 💰 ADMIN TOKEN PURCHASES - COMPLETE
-// ========================================
-
-app.get('/api/admin/token-purchases', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { page = 1, limit = 20, status = 'all' } = req.query;
-        
-        let query = {};
-        if (status !== 'all') {
-            query.paymentStatus = status;
-        }
-        
-        const purchases = await TokenPurchase.find(query)
-            .populate('userId', 'name phoneNumber')
-            .populate('adminId', 'name username')
-            .sort({ purchaseDate: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
-            
-        const total = await TokenPurchase.countDocuments(query);
-        
-        // Format phone numbers
-        const formattedPurchases = purchases.map(purchase => ({
-            ...purchase.toObject(),
-            userId: purchase.userId ? {
-                ...purchase.userId.toObject(),
-                phoneNumber: formatPhoneNumber(purchase.userId.phoneNumber)
-            } : null
-        }));
-        
-        res.json({
-            purchases: formattedPurchases,
-            total,
-            page: parseInt(page),
-            limit: parseInt(limit),
-            totalPages: Math.ceil(total / limit)
-        });
-    } catch (error) {
-        logger.error('Get token purchases error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.post('/api/admin/token-purchase', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { userId, quantity, pricePerToken, paymentMethod, notes } = req.body;
-        
-        if (!userId || !quantity || !pricePerToken) {
-            return res.status(400).json({ error: 'Field wajib harus diisi' });
-        }
-        
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        const totalAmount = quantity * pricePerToken;
-        
-        const purchase = new TokenPurchase({
-            userId,
-            adminId: req.userId,
-            quantity,
-            pricePerToken,
-            totalAmount,
-            paymentStatus: 'completed',
-            paymentMethod: paymentMethod || 'cash',
-            notes: notes || `Manual token addition by admin`,
-            completedDate: new Date()
-        });
-        
-        await purchase.save();
-        
-        // Add tokens to user
-        user.paidScratchesRemaining = (user.paidScratchesRemaining || 0) + quantity;
-        user.totalPurchasedScratches = (user.totalPurchasedScratches || 0) + quantity;
-        user.totalSpent = (user.totalSpent || 0) + totalAmount;
-        await user.save();
-        
-        // Broadcast token update
-        socketManager.broadcastTokenPurchase({
-            userId: user._id,
-            quantity,
-            newBalance: {
-                free: user.freeScratchesRemaining || 0,
-                paid: user.paidScratchesRemaining,
-                total: (user.freeScratchesRemaining || 0) + user.paidScratchesRemaining
-            }
-        });
-        
-        logger.info(`Manual token purchase created: ${quantity} tokens for ${user.name} by admin: ${req.userId}`);
-        
-        res.status(201).json({
-            message: 'Token purchase berhasil dibuat',
-            purchase,
-            userBalance: {
-                free: user.freeScratchesRemaining || 0,
-                paid: user.paidScratchesRemaining,
-                total: (user.freeScratchesRemaining || 0) + user.paidScratchesRemaining
-            }
-        });
-    } catch (error) {
-        logger.error('Create token purchase error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/token-purchase/:purchaseId/complete', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { purchaseId } = req.params;
-        
-        const purchase = await TokenPurchase.findOne({
-            _id: purchaseId,
-            paymentStatus: 'pending'
-        }).populate('userId');
-        
-        if (!purchase) {
-            return res.status(404).json({ error: 'Token purchase tidak ditemukan atau sudah diproses' });
-        }
-        
-        const user = await User.findById(purchase.userId._id);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        // Update purchase
-        purchase.paymentStatus = 'completed';
-        purchase.completedDate = new Date();
-        purchase.adminId = req.userId;
-        await purchase.save();
-        
-        // Add tokens to user
-        user.paidScratchesRemaining = (user.paidScratchesRemaining || 0) + purchase.quantity;
-        user.totalPurchasedScratches = (user.totalPurchasedScratches || 0) + purchase.quantity;
-        user.totalSpent = (user.totalSpent || 0) + purchase.totalAmount;
-        await user.save();
-        
-        // Broadcast token update
-        socketManager.broadcastTokenPurchase({
-            userId: user._id,
-            quantity: purchase.quantity,
-            newBalance: {
-                free: user.freeScratchesRemaining || 0,
-                paid: user.paidScratchesRemaining,
-                total: (user.freeScratchesRemaining || 0) + user.paidScratchesRemaining
-            }
-        });
-        
-        logger.info(`Token purchase completed: ${purchase.quantity} tokens for ${user.name} by admin: ${req.userId}`);
-        
-        res.json({
-            message: 'Token purchase berhasil dicomplete',
-            tokensAdded: purchase.quantity,
-            userBalance: {
-                free: user.freeScratchesRemaining || 0,
-                paid: user.paidScratchesRemaining,
-                total: (user.freeScratchesRemaining || 0) + user.paidScratchesRemaining
-            }
-        });
-    } catch (error) {
-        logger.error('Complete token purchase error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/token-purchase/:purchaseId/cancel', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { purchaseId } = req.params;
-        const { reason } = req.body;
-        
-        const purchase = await TokenPurchase.findOne({
-            _id: purchaseId,
-            paymentStatus: 'pending'
-        }).populate('userId');
-        
-        if (!purchase) {
-            return res.status(404).json({ error: 'Token purchase tidak ditemukan atau sudah diproses' });
-        }
-        
-        // Update purchase
-        purchase.paymentStatus = 'cancelled';
-        purchase.adminId = req.userId;
-        purchase.notes = (purchase.notes || '') + ` | Cancelled by admin: ${reason || 'No reason provided'}`;
-        await purchase.save();
-        
-        logger.info(`Token purchase cancelled: ${purchase.quantity} tokens for ${purchase.userId.name} by admin: ${req.userId} - Reason: ${reason}`);
-        
-        res.json({
-            message: 'Token purchase berhasil dicancel'
-        });
-    } catch (error) {
-        logger.error('Cancel token purchase error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 🆕 QRIS ADMIN MANAGEMENT - COMPLETE
-// ========================================
-
-app.get('/api/admin/qris-requests', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { page = 1, limit = 20, status = 'all' } = req.query;
-        
-        let query = { paymentMethod: 'qris' };
-        if (status !== 'all') {
-            query.paymentStatus = status;
-        }
-        
-        const qrisRequests = await TokenPurchase.find(query)
-            .populate('userId', 'name phoneNumber')
-            .populate('adminId', 'name username')
-            .sort({ purchaseDate: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
-            
-        const total = await TokenPurchase.countDocuments(query);
-        
-        // Format phone numbers
-        const formattedRequests = qrisRequests.map(request => ({
-            ...request.toObject(),
-            userId: request.userId ? {
-                ...request.userId.toObject(),
-                phoneNumber: formatPhoneNumber(request.userId.phoneNumber)
-            } : null
-        }));
-        
-        res.json({
-            requests: formattedRequests,
-            total,
-            page: parseInt(page),
-            limit: parseInt(limit),
-            totalPages: Math.ceil(total / limit)
-        });
-    } catch (error) {
-        logger.error('Get QRIS requests error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.post('/api/admin/qris-approve', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { requestId, notes } = req.body;
-        
-        if (!requestId) {
-            return res.status(400).json({ error: 'Request ID diperlukan' });
-        }
-        
-        const qrisRequest = await TokenPurchase.findOne({
-            _id: requestId,
-            paymentMethod: 'qris',
-            paymentStatus: 'pending'
-        }).populate('userId');
-        
-        if (!qrisRequest) {
-            return res.status(404).json({ error: 'QRIS request tidak ditemukan atau sudah diproses' });
-        }
-        
-        const user = await User.findById(qrisRequest.userId._id);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        // Update QRIS request
-        qrisRequest.paymentStatus = 'completed';
-        qrisRequest.completedDate = new Date();
-        qrisRequest.adminId = req.userId;
-        qrisRequest.notes = (qrisRequest.notes || '') + (notes ? ` | Admin: ${notes}` : ' | Approved via QRIS');
-        await qrisRequest.save();
-        
-        // Add tokens to user
-        user.paidScratchesRemaining = (user.paidScratchesRemaining || 0) + qrisRequest.quantity;
-        user.totalPurchasedScratches = (user.totalPurchasedScratches || 0) + qrisRequest.quantity;
-        user.totalSpent = (user.totalSpent || 0) + qrisRequest.totalAmount;
-        await user.save();
-        
-        // Broadcast approval
-        socketManager.broadcastQRISApproval({
-            userId: user._id,
-            requestId: qrisRequest._id,
-            quantity: qrisRequest.quantity,
-            totalAmount: qrisRequest.totalAmount,
-            qrisReference: qrisRequest.qrisReference,
-            newBalance: {
-                free: user.freeScratchesRemaining || 0,
-                paid: user.paidScratchesRemaining,
-                total: (user.freeScratchesRemaining || 0) + user.paidScratchesRemaining
-            },
-            message: `${qrisRequest.quantity} token QRIS berhasil diverifikasi!`
-        });
-        
-        logger.info(`QRIS payment approved: ${qrisRequest.quantity} tokens for ${user.name} - Ref: ${qrisRequest.qrisReference}`);
-        
-        res.json({
-            success: true,
-            message: 'QRIS payment berhasil diverifikasi',
-            tokensAdded: qrisRequest.quantity,
-            userBalance: {
-                free: user.freeScratchesRemaining || 0,
-                paid: user.paidScratchesRemaining,
-                total: (user.freeScratchesRemaining || 0) + user.paidScratchesRemaining
-            }
-        });
-    } catch (error) {
-        logger.error('QRIS approve error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.post('/api/admin/qris-reject', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { requestId, reason } = req.body;
-        
-        if (!requestId) {
-            return res.status(400).json({ error: 'Request ID diperlukan' });
-        }
-        
-        const qrisRequest = await TokenPurchase.findOne({
-            _id: requestId,
-            paymentMethod: 'qris',
-            paymentStatus: 'pending'
-        }).populate('userId');
-        
-        if (!qrisRequest) {
-            return res.status(404).json({ error: 'QRIS request tidak ditemukan atau sudah diproses' });
-        }
-        
-        // Update QRIS request
-        qrisRequest.paymentStatus = 'cancelled';
-        qrisRequest.adminId = req.userId;
-        qrisRequest.notes = (qrisRequest.notes || '') + ` | Rejected: ${reason || 'No reason provided'}`;
-        await qrisRequest.save();
-        
-        // Broadcast rejection
-        socketManager.broadcastQRISRejection({
-            userId: qrisRequest.userId._id,
-            requestId: qrisRequest._id,
-            quantity: qrisRequest.quantity,
-            totalAmount: qrisRequest.totalAmount,
-            qrisReference: qrisRequest.qrisReference,
-            reason: reason || 'Payment rejected by admin',
-            message: `QRIS payment request ditolak: ${reason || 'Silakan hubungi admin'}`
-        });
-        
-        logger.info(`QRIS payment rejected: ${qrisRequest.quantity} tokens for ${qrisRequest.userId.name} - Reason: ${reason}`);
-        
-        res.json({
-            success: true,
-            message: 'QRIS payment berhasil ditolak'
-        });
-    } catch (error) {
-        logger.error('QRIS reject error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.get('/api/admin/qris-config', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        let qrisConfig = await QRISConfig.findOne();
-        if (!qrisConfig) {
-            qrisConfig = new QRISConfig();
-            await qrisConfig.save();
-        }
-        
-        res.json(qrisConfig);
-    } catch (error) {
-        logger.error('Get admin QRIS config error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/qris-config', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const updateData = { ...req.body, lastUpdated: new Date() };
-        
-        const qrisConfig = await QRISConfig.findOneAndUpdate(
-            {},
-            updateData,
-            { new: true, upsert: true }
-        );
-        
-        logger.info('QRIS configuration updated by admin');
-        
-        res.json({
-            success: true,
-            message: 'QRIS configuration berhasil diupdate',
-            config: qrisConfig
-        });
-    } catch (error) {
-        logger.error('Update QRIS config error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 📜 ADMIN HISTORY MANAGEMENT - COMPLETE
-// ========================================
-
-app.get('/api/admin/scratch-history', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { page = 1, limit = 50, winOnly = false, userId } = req.query;
-        
-        let query = {};
-        if (winOnly === 'true') {
-            query.isWin = true;
-        }
-        if (userId) {
-            query.userId = userId;
-        }
-        
-        const history = await Scratch.find(query)
-            .populate('userId', 'name phoneNumber')
-            .populate('prizeId', 'name value type winningNumber')
-            .sort({ scratchDate: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
-            
-        const total = await Scratch.countDocuments(query);
-        
-        // Format phone numbers
-        const formattedHistory = history.map(scratch => ({
-            ...scratch.toObject(),
-            userId: scratch.userId ? {
-                ...scratch.userId.toObject(),
-                phoneNumber: formatPhoneNumber(scratch.userId.phoneNumber)
-            } : null
-        }));
-        
-        res.json({
-            history: formattedHistory,
-            total,
-            page: parseInt(page),
-            limit: parseInt(limit),
-            totalPages: Math.ceil(total / limit)
-        });
-    } catch (error) {
-        logger.error('Get scratch history error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 🏦 ADMIN BANK ACCOUNTS - COMPLETE
-// ========================================
-
-app.get('/api/admin/bank-accounts', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const bankAccounts = await BankAccount.find().sort({ createdAt: -1 });
-        res.json(bankAccounts);
-    } catch (error) {
-        logger.error('Get bank accounts error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.post('/api/admin/bank-account', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { bankName, accountNumber, accountHolder, isActive } = req.body;
-        
-        if (!bankName || !accountNumber || !accountHolder) {
-            return res.status(400).json({ error: 'Semua field wajib harus diisi' });
-        }
-        
-        // Deactivate all other accounts if this one is active
-        if (isActive) {
-            await BankAccount.updateMany({}, { isActive: false });
-        }
-        
-        const bankAccount = new BankAccount({
-            bankName,
-            accountNumber,
-            accountHolder,
-            isActive: isActive !== false
-        });
-        
-        await bankAccount.save();
-        
-        logger.info(`Bank account added: ${bankName} - ${accountNumber} by admin: ${req.userId}`);
-        
-        res.status(201).json({
-            message: 'Bank account berhasil ditambahkan',
-            bankAccount
-        });
-    } catch (error) {
-        logger.error('Add bank account error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.put('/api/admin/bank-accounts/:accountId', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { accountId } = req.params;
-        const updateData = req.body;
-        
-        // Deactivate all other accounts if this one is being set to active
-        if (updateData.isActive) {
-            await BankAccount.updateMany({ _id: { $ne: accountId } }, { isActive: false });
-        }
-        
-        const bankAccount = await BankAccount.findByIdAndUpdate(accountId, updateData, { new: true });
-        
-        if (!bankAccount) {
-            return res.status(404).json({ error: 'Bank account tidak ditemukan' });
-        }
-        
-        logger.info(`Bank account updated: ${bankAccount.bankName} by admin: ${req.userId}`);
-        
-        res.json({
-            message: 'Bank account berhasil diupdate',
-            bankAccount
-        });
-    } catch (error) {
-        logger.error('Update bank account error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-app.delete('/api/admin/bank-accounts/:accountId', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { accountId } = req.params;
-        
-        const bankAccount = await BankAccount.findByIdAndDelete(accountId);
-        
-        if (!bankAccount) {
-            return res.status(404).json({ error: 'Bank account tidak ditemukan' });
-        }
-        
-        logger.info(`Bank account deleted: ${bankAccount.bankName} by admin: ${req.userId}`);
-        
-        res.json({ message: 'Bank account berhasil dihapus' });
-    } catch (error) {
-        logger.error('Delete bank account error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 📈 ADMIN ANALYTICS - COMPLETE
-// ========================================
-
-app.get('/api/admin/analytics', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const { period = '7days' } = req.query;
-        
-        let startDate;
-        const endDate = new Date();
-        
-        switch (period) {
-            case '24hours':
-                startDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
-                break;
-            case '7days':
-                startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-                break;
-            case '30days':
-                startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-                break;
-            case '90days':
-                startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-                break;
-            default:
-                startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        }
-        
-        const [
-            totalUsers,
-            newUsers,
-            activeUsers,
-            totalScratches,
-            totalWins,
-            totalRevenue,
-            totalPrizesDistributed,
-            topPrizes,
-            dailyStats
-        ] = await Promise.all([
-            User.countDocuments(),
-            User.countDocuments({ createdAt: { $gte: startDate } }),
-            User.countDocuments({ lastActiveDate: { $gte: startDate } }),
-            Scratch.countDocuments({ scratchDate: { $gte: startDate } }),
-            Scratch.countDocuments({ scratchDate: { $gte: startDate }, isWin: true }),
-            TokenPurchase.aggregate([
-                { $match: { paymentStatus: 'completed', completedDate: { $gte: startDate } } },
-                { $group: { _id: null, total: { $sum: '$totalAmount' } } }
-            ]),
-            Winner.aggregate([
-                { $match: { scratchDate: { $gte: startDate } } },
-                { $lookup: { from: 'prizes', localField: 'prizeId', foreignField: '_id', as: 'prize' } },
-                { $unwind: '$prize' },
-                { $group: { _id: null, total: { $sum: '$prize.value' } } }
-            ]),
-            Winner.aggregate([
-                { $match: { scratchDate: { $gte: startDate } } },
-                { $lookup: { from: 'prizes', localField: 'prizeId', foreignField: '_id', as: 'prize' } },
-                { $unwind: '$prize' },
-                { $group: { 
-                    _id: '$prizeId', 
-                    name: { $first: '$prize.name' },
-                    winningNumber: { $first: '$prize.winningNumber' },
-                    count: { $sum: 1 },
-                    totalValue: { $sum: '$prize.value' }
-                } },
-                { $sort: { count: -1 } },
-                { $limit: 10 }
-            ]),
-            // Daily statistics for charts
-            Scratch.aggregate([
-                { $match: { scratchDate: { $gte: startDate } } },
-                { $group: {
-                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$scratchDate" } },
-                    totalScratches: { $sum: 1 },
-                    totalWins: { $sum: { $cond: ["$isWin", 1, 0] } }
-                } },
-                { $sort: { _id: 1 } }
-            ])
-        ]);
-        
-        // Get online users data
-        const onlineUsersData = getOnlineUsers();
-        
-        const analytics = {
-            totalUsers,
-            newUsers,
-            activeUsers,
-            totalScratches,
-            totalWins,
-            totalRevenue: totalRevenue[0]?.total || 0,
-            totalPrizesDistributed: totalPrizesDistributed[0]?.total || 0,
-            winRate: totalScratches > 0 ? ((totalWins / totalScratches) * 100).toFixed(2) : 0,
-            avgScratchesPerUser: activeUsers > 0 ? (totalScratches / activeUsers).toFixed(1) : 0,
-            topPrizes,
-            dailyStats,
-            onlineUsers: onlineUsersData,
-            conversionRate: newUsers > 0 ? ((activeUsers / newUsers) * 100).toFixed(1) : 0,
-            avgRevenuePerUser: activeUsers > 0 ? ((totalRevenue[0]?.total || 0) / activeUsers).toFixed(0) : 0
+        const todayVolume = todayTrades.reduce((sum, trade) => sum + trade.amount, 0);
+        
+        // Enhanced recent activities with better population
+        const recentActivities = await Activity.find()
+            .populate('userId', 'name email phone')
+            .sort({ createdAt: -1 })
+            .limit(15);
+        
+        const stats = {
+            users: { total: totalUsers, active: activeUsers },
+            trades: { total: totalTrades, active: activeTrades },
+            deposits: { total: totalDeposits, pending: pendingDeposits },
+            withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
+            volume: { total: totalVolume, today: todayVolume },
+            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts }
         };
-        
-        res.json(analytics);
-    } catch (error) {
-        logger.error('Get analytics error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 🔧 ADMIN SYSTEM STATUS - COMPLETE
-// ========================================
-
-app.get('/api/admin/system-status', verifyToken, verifyAdmin, adminRateLimit, async (req, res) => {
-    try {
-        const systemStatus = {
-            status: 'healthy',
-            version: '7.6.0-phone-only-online-tracking',
-            uptime: {
-                seconds: process.uptime(),
-                formatted: Math.floor(process.uptime() / 3600) + 'h ' + Math.floor((process.uptime() % 3600) / 60) + 'm'
-            },
-            memory: {
-                usage: Math.round((process.memoryUsage().heapUsed / process.memoryUsage().heapTotal) * 100),
-                used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
-                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
-            },
-            database: {
-                connected: mongoose.connection.readyState === 1,
-                responseTime: mongoose.connection.readyState === 1 ? '< 100ms' : 'N/A',
-                collections: mongoose.connection.readyState === 1 ? Object.keys(mongoose.connection.collections).length : 0
-            },
-            environment: process.env.NODE_ENV || 'production',
-            platform: process.platform,
-            nodeVersion: process.version,
-            lastRestart: new Date(Date.now() - process.uptime() * 1000),
-            cpu: {
-                usage: Math.random() * 20 + 10 // Simulated CPU usage
-            },
-            loadAverage: 'N/A',
-            performance: {
-                responseTime: Math.floor(Math.random() * 50) + 50 // Simulated response time
-            },
-            cors: {
-                status: 'Enhanced & Secure',
-                allowedOrigins: allowedOrigins.length
-            },
-            features: {
-                phoneOnlyRegistration: 'Active ✅',
-                onlineUserTracking: 'Active ✅',
-                dailyTokenDistribution: 'Available ✅',
-                manualTokenAddition: 'Available ✅',
-                qrisPayment: 'Active',
-                bankTransfer: 'Active',
-                realTimeSync: 'Active',
-                socketIO: 'Connected'
-            },
-            onlineUsers: getOnlineUsers()
-        };
-        
-        res.json(systemStatus);
-    } catch (error) {
-        logger.error('Get system status error:', error);
-        res.status(500).json({ error: 'Server error: ' + error.message });
-    }
-});
-
-// ========================================
-// 👤 USER ROUTES - LENGKAP (PHONE DISPLAY)
-// ========================================
-
-app.get('/api/user/profile', verifyToken, async (req, res) => {
-    try {
-        const user = await User.findById(req.userId).select('-password');
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        res.json({
-            ...user.toObject(),
-            phoneNumber: formatPhoneNumber(user.phoneNumber),
-            freeScratchesRemaining: user.freeScratchesRemaining || 0,
-            paidScratchesRemaining: user.paidScratchesRemaining || 0,
-            scratchCount: user.scratchCount || 0,
-            winCount: user.winCount || 0,
-            totalSpent: user.totalSpent || 0,
-            totalWon: user.totalWon || 0
-        });
-    } catch (error) {
-        logger.error('Profile error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.post('/api/user/token-request', verifyToken, async (req, res) => {
-    try {
-        const { quantity, paymentMethod } = req.body;
-        
-        if (!quantity || quantity < 1 || quantity > 100) {
-            return res.status(400).json({ error: 'Quantity token harus 1-100' });
-        }
-        
-        const user = await User.findById(req.userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        const settings = await GameSettings.findOne();
-        const pricePerToken = settings?.scratchTokenPrice || 25000;
-        const totalAmount = pricePerToken * quantity;
-        
-        const request = new TokenPurchase({
-            userId: req.userId,
-            quantity,
-            pricePerToken,
-            totalAmount,
-            paymentStatus: 'pending',
-            paymentMethod: paymentMethod || 'bank',
-            notes: `Token request by ${user.name}`
-        });
-        
-        await request.save();
-        
-        socketManager.broadcastTokenRequest({
-            requestId: request._id,
-            userId: req.userId,
-            userName: user.name,
-            userPhone: formatPhoneNumber(user.phoneNumber),
-            quantity,
-            totalAmount,
-            pricePerToken,
-            paymentMethod,
-            timestamp: request.purchaseDate
-        });
-        
-        logger.info(`Token request: ${quantity} tokens by ${user.name}`);
-        
-        res.json({
-            message: 'Token request berhasil dibuat. Admin akan memproses segera.',
-            requestId: request._id,
-            totalAmount,
-            quantity,
-            pricePerToken,
-            paymentMethod
-        });
-    } catch (error) {
-        logger.error('Token request error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.get('/api/user/history', verifyToken, async (req, res) => {
-    try {
-        const { page = 1, limit = 20 } = req.query;
-        
-        const scratches = await Scratch.find({ userId: req.userId })
-            .populate('prizeId')
-            .sort({ scratchDate: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
-            
-        const total = await Scratch.countDocuments({ userId: req.userId });
         
         res.json({ 
-            scratches,
-            total,
-            page: parseInt(page),
-            limit: parseInt(limit),
-            totalPages: Math.ceil(total / limit)
+            stats,
+            recentActivities
         });
+        
+        console.log(`✅ Admin dashboard loaded by ${req.user.name}`);
+        
     } catch (error) {
-        logger.error('History error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('❌ Admin dashboard error:', error);
+        res.status(500).json({ error: 'Failed to load dashboard' });
     }
 });
 
-// ========================================
-// 🎮 GAME ROUTES - WIN RATE LOGIC FIXED
-// ========================================
-
-// ✅ PREPARE SCRATCH - Fixed Win Rate Logic 
-app.post('/api/game/prepare-scratch', verifyToken, async (req, res) => {
+// Enhanced User Management
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const settings = await GameSettings.findOne();
-        if (!settings || !settings.isGameActive || settings.maintenanceMode) {
-            return res.status(400).json({ 
-                error: settings?.maintenanceMode ? settings.maintenanceMessage : 'Game sedang tidak aktif' 
-            });
-        }
+        const users = await User.find()
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .limit(200); // Limit untuk performance
         
-        const user = await User.findById(req.userId);
-        
-        const totalScratches = (user.freeScratchesRemaining || 0) + (user.paidScratchesRemaining || 0);
-        
-        if (totalScratches <= 0) {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            
-            if (!user.lastScratchDate || user.lastScratchDate < today) {
-                user.freeScratchesRemaining = settings.maxFreeScratchesPerDay || 1;
-                await user.save();
-                logger.info(`Reset free scratches for ${user.name} to ${user.freeScratchesRemaining}`);
-            } else {
-                return res.status(400).json({ 
-                    error: 'Kesempatan habis! Beli token scratch atau tunggu besok.',
-                    needTokens: true 
-                });
-            }
-        }
-        
-        let scratchNumber;
-        let forcedPrize = null;
-        let isWinningNumber = false;
-        
-        // ✅ PRIORITY 1: FORCED WINNING (Admin set specific number)
-        if (user.forcedWinningNumber) {
-            scratchNumber = user.forcedWinningNumber;
-            
-            // Validate forced prize
-            forcedPrize = await Prize.findOne({ 
-                winningNumber: scratchNumber,
-                isActive: true
-            });
-            
-            if (!forcedPrize) {
-                logger.error(`FORCED WINNING ERROR: No active prize found for number ${scratchNumber}`);
-                user.forcedWinningNumber = null;
-            } else if (forcedPrize.stock <= 0) {
-                logger.error(`FORCED WINNING ERROR: Prize ${forcedPrize.name} (${scratchNumber}) has no stock`);
-                user.forcedWinningNumber = null;
-            } else {
-                isWinningNumber = true;
-                logger.info(`✅ FORCED WINNING PREPARED: ${user.name} will win ${forcedPrize.name} (${scratchNumber})`);
-            }
-        }
-        
-        // ✅ PRIORITY 2: WIN RATE LOGIC (Control di sini!)
-        if (!user.forcedWinningNumber) {
-            const winRate = user.customWinRate !== null ? user.customWinRate : settings.winProbability;
-            const randomChance = Math.random() * 100;
-            
-            // Get all available winning numbers
-            const availablePrizes = await Prize.find({
-                stock: { $gt: 0 },
-                isActive: true
-            });
-            
-            const winningNumbers = availablePrizes.map(p => p.winningNumber);
-            
-            // ✅ FIXED: Control berdasarkan win rate
-            if (randomChance <= winRate && winningNumbers.length > 0) {
-                // 🎯 AKAN MENANG: Berikan angka yang ADA di winning numbers
-                const selectedPrize = availablePrizes[Math.floor(Math.random() * availablePrizes.length)];
-                scratchNumber = selectedPrize.winningNumber;
-                forcedPrize = selectedPrize;
-                isWinningNumber = true;
-                
-                logger.info(`🎯 WIN RATE SUCCESS: ${user.name} will get winning number ${scratchNumber} (${selectedPrize.name}) - Rate: ${winRate}%, Roll: ${randomChance.toFixed(1)}%`);
-            } else {
-                // ❌ TIDAK AKAN MENANG: Berikan angka yang TIDAK ADA di winning numbers
-                scratchNumber = generateNonWinningNumber(winningNumbers);
-                isWinningNumber = false;
-                
-                logger.info(`❌ WIN RATE FAILED: ${user.name} will get non-winning number ${scratchNumber} - Rate: ${winRate}%, Roll: ${randomChance.toFixed(1)}%`);
-            }
-        }
-        
-        // 💾 SAVE: Simpan prepared data
-        user.preparedScratchNumber = scratchNumber;
-        user.preparedScratchDate = new Date();
-        user.lastActiveDate = new Date();
-        
-        // Store prize info jika akan menang
-        if (forcedPrize && isWinningNumber) {
-            user.preparedForcedPrizeId = forcedPrize._id;
-        } else {
-            user.preparedForcedPrizeId = null;
-        }
-        
-        await user.save();
-        
-        logger.info(`Prepared scratch ${scratchNumber} for ${user.name} - Will win: ${isWinningNumber}${forcedPrize ? ` (${forcedPrize.name})` : ''}`);
-        
-        res.json({
-            message: 'Scratch berhasil disiapkan',
-            scratchNumber: scratchNumber,
-            preparedAt: user.preparedScratchDate
-        });
+        res.json({ users });
     } catch (error) {
-        logger.error('Prepare scratch error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('❌ Admin users error:', error);
+        res.status(500).json({ error: 'Failed to load users' });
     }
 });
 
-// ✅ SCRATCH - Simplified Logic (Hanya cek exact match)
-app.post('/api/game/scratch', verifyToken, async (req, res) => {
+app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const { scratchNumber } = req.body;
+        const { id } = req.params;
+        const updateData = req.body;
         
-        if (!scratchNumber || !/^\d{4}$/.test(scratchNumber)) {
-            return res.status(400).json({ error: 'Format scratch number salah' });
+        console.log('Received update data:', updateData);
+        
+        // Enhanced validation
+        delete updateData.password; // Don't allow password updates through this endpoint
+        
+        // Validate basic fields
+        if (updateData.name && updateData.name.trim().length < 2) {
+            return res.status(400).json({ error: 'Name must be at least 2 characters long' });
         }
         
-        const settings = await GameSettings.findOne();
-        if (!settings || !settings.isGameActive || settings.maintenanceMode) {
-            return res.status(400).json({ 
-                error: settings?.maintenanceMode ? settings.maintenanceMessage : 'Game sedang tidak aktif' 
-            });
-        }
-        
-        const user = await User.findById(req.userId);
-        
-        // ✅ VALIDATION: Cek prepared scratch
-        if (!user.preparedScratchNumber || user.preparedScratchNumber !== scratchNumber) {
-            logger.error(`SYNC ERROR for ${user.name}. Expected: ${user.preparedScratchNumber}, Got: ${scratchNumber}`);
-            return res.status(400).json({ 
-                error: 'Scratch number tidak valid. Silakan prepare ulang.',
-                requireNewPreparation: true
-            });
-        }
-        
-        // ✅ EXPIRY CHECK: Cek apakah prepared scratch expired
-        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-        if (user.preparedScratchDate < fiveMinutesAgo) {
-            user.preparedScratchNumber = null;
-            user.preparedScratchDate = null;
-            user.preparedForcedPrizeId = null;
-            await user.save();
-            
-            return res.status(400).json({ 
-                error: 'Prepared scratch expired. Silakan prepare ulang.',
-                requireNewPreparation: true
-            });
-        }
-        
-        // ✅ BALANCE CHECK
-        const totalScratches = (user.freeScratchesRemaining || 0) + (user.paidScratchesRemaining || 0);
-        
-        if (totalScratches <= 0) {
-            return res.status(400).json({ 
-                error: 'Kesempatan habis! Beli token scratch atau tunggu besok.',
-                needTokens: true 
-            });
-        }
-        
-        let isWin = false;
-        let prize = null;
-        let winner = null;
-        let isPaidScratch = false;
-        
-        if (user.paidScratchesRemaining > 0) {
-            isPaidScratch = true;
-        }
-        
-        // ✅ SIMPLIFIED WIN LOGIC: Hanya cek exact match!
-        
-        // 1. Cek apakah ada prepared forced prize
-        if (user.preparedForcedPrizeId) {
-            prize = await Prize.findById(user.preparedForcedPrizeId);
-            
-            if (prize && prize.stock > 0 && prize.isActive) {
-                isWin = true;
-                logger.info(`🎯 PREPARED WIN: ${user.name} won ${prize.name} (${scratchNumber})`);
-                
-                // Update stock
-                prize.stock -= 1;
-                await prize.save();
-                
-                socketManager.broadcastPrizeUpdate({
-                    type: 'stock_updated',
-                    prizeId: prize._id,
-                    newStock: prize.stock
-                });
+        if (updateData.balance !== undefined) {
+            const balance = parseFloat(updateData.balance);
+            if (isNaN(balance) || balance < 0) {
+                return res.status(400).json({ error: 'Balance must be a valid positive number' });
             }
-        } else {
-            // 2. Cek exact match (jika tidak ada prepared prize)
-            const exactMatchPrize = await Prize.findOne({ 
-                winningNumber: scratchNumber,
-                stock: { $gt: 0 },
-                isActive: true
-            });
+            updateData.balance = balance;
+        }
+        
+        // Validate admin settings with enhanced checks
+        if (updateData.adminSettings) {
+            const { profitPercentage, forceWinRate, profitCollapse, forceWin } = updateData.adminSettings;
             
-            if (exactMatchPrize) {
-                isWin = true;
-                prize = exactMatchPrize;
-                
-                logger.info(`🎯 EXACT MATCH: ${user.name} won ${prize.name} with ${scratchNumber}`);
-                
-                prize.stock -= 1;
-                await prize.save();
-                
-                socketManager.broadcastPrizeUpdate({
-                    type: 'stock_updated',
-                    prizeId: prize._id,
-                    newStock: prize.stock
-                });
-            } else {
-                logger.info(`❌ NO MATCH: ${user.name} scratched ${scratchNumber} - No prize with this number`);
+            // Validate profit percentage
+            if (profitPercentage !== undefined) {
+                const percentage = parseInt(profitPercentage);
+                if (isNaN(percentage) || percentage < 20 || percentage > 100) {
+                    return res.status(400).json({ error: 'Profit percentage must be between 20 and 100' });
+                }
+                updateData.adminSettings.profitPercentage = percentage;
+            }
+            
+            // Validate win rate
+            if (forceWinRate !== undefined) {
+                const winRate = parseFloat(forceWinRate);
+                if (isNaN(winRate) || winRate < 0 || winRate > 100) {
+                    return res.status(400).json({ error: 'Win rate must be between 0 and 100' });
+                }
+                updateData.adminSettings.forceWinRate = winRate;
+            }
+            
+            // Validate profit collapse setting
+            if (profitCollapse && !['normal', 'profit', 'collapse'].includes(profitCollapse)) {
+                return res.status(400).json({ error: 'Invalid profit collapse setting' });
+            }
+            
+            // Ensure forceWin is boolean
+            if (forceWin !== undefined) {
+                updateData.adminSettings.forceWin = Boolean(forceWin);
             }
         }
         
-        // ✅ CREATE SCRATCH RECORD
-        const scratch = new Scratch({
-            userId: req.userId,
-            scratchNumber,
-            isWin,
-            prizeId: prize?._id,
-            isPaid: isPaidScratch
+        // Clean up undefined/empty values
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] === undefined || updateData[key] === '') {
+                delete updateData[key];
+            }
         });
         
-        await scratch.save();
+        console.log('Processed update data:', updateData);
         
-        // Broadcast new scratch
-        socketManager.broadcastNewScratch({
-            _id: scratch._id,
-            userId: req.userId,
-            scratchNumber,
-            isWin,
-            isPaid: isPaidScratch,
-            prize: isWin && prize ? {
-                name: prize.name,
-                type: prize.type,
-                value: prize.value
-            } : null,
-            scratchDate: scratch.scratchDate
-        });
+        const user = await User.findByIdAndUpdate(
+            id,
+            updateData,
+            { 
+                new: true, 
+                runValidators: true,
+                omitUndefined: true 
+            }
+        ).select('-password');
         
-        // ✅ CREATE WINNER RECORD
-        if (isWin && prize) {
-            const claimCode = Math.random().toString(36).substring(2, 10).toUpperCase();
-            
-            winner = new Winner({
-                userId: req.userId,
-                prizeId: prize._id,
-                scratchId: scratch._id,
-                claimCode,
-                expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
-            });
-            
-            await winner.save();
-            
-            const winnerData = await Winner.findById(winner._id)
-                .populate('userId', 'name phoneNumber')
-                .populate('prizeId', 'name value type');
-                
-            socketManager.broadcastNewWinner(winnerData);
-            
-            user.totalWon = (user.totalWon || 0) + prize.value;
-        }
-        
-        // ✅ UPDATE USER BALANCES & RESET PREPARED DATA
-        if (isPaidScratch) {
-            user.paidScratchesRemaining -= 1;
-        } else {
-            user.freeScratchesRemaining -= 1;
-        }
-        
-        user.scratchCount += 1;
-        if (isWin) user.winCount += 1;
-        user.lastScratchDate = new Date();
-        user.lastActiveDate = new Date();
-        
-        // ✅ CLEAR: Reset semua prepared data
-        user.preparedScratchNumber = null;
-        user.preparedScratchDate = null;
-        user.preparedForcedPrizeId = null;
-        user.forcedWinningNumber = null; // Clear forced winning setelah digunakan
-        
-        await user.save();
-        
-        logger.info(`✅ SCRATCH COMPLETED for ${user.name}: Win=${isWin}${prize ? ` (${prize.name})` : ''}, Balance=Free:${user.freeScratchesRemaining}/Paid:${user.paidScratchesRemaining}`);
-        
-        res.json({
-            scratchNumber,
-            isWin,
-            prize: isWin ? {
-                name: prize.name,
-                type: prize.type,
-                value: prize.value,
-                claimCode: winner?.claimCode
-            } : null,
-            remainingScratches: {
-                free: user.freeScratchesRemaining,
-                paid: user.paidScratchesRemaining,
-                total: user.freeScratchesRemaining + user.paidScratchesRemaining
-            },
-            isPaidScratch
-        });
-    } catch (error) {
-        logger.error('Scratch error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.get('/api/game/balance', verifyToken, async (req, res) => {
-    try {
-        const user = await User.findById(req.userId).select('freeScratchesRemaining paidScratchesRemaining');
         if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
+            return res.status(404).json({ error: 'User not found' });
         }
         
-        res.json({
-            free: user.freeScratchesRemaining || 0,
-            paid: user.paidScratchesRemaining || 0,
-            total: (user.freeScratchesRemaining || 0) + (user.paidScratchesRemaining || 0)
-        });
-    } catch (error) {
-        logger.error('Get balance error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ========================================
-// 🌐 PUBLIC ROUTES - LENGKAP
-// ========================================
-
-app.get('/api/public/prizes', async (req, res) => {
-    try {
-        const prizes = await Prize.find({ isActive: true })
-            .select('winningNumber name type value stock category priority description')
-            .sort({ priority: -1, createdAt: -1 });
-        res.json(prizes);
-    } catch (error) {
-        logger.error('Get public prizes error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.get('/api/public/game-settings', async (req, res) => {
-    try {
-        let settings = await GameSettings.findOne();
+        await logActivity(req.userId, 'ADMIN_USER_UPDATE', `Updated user: ${user.name} (${user.email || user.phone})`, req);
         
-        if (!settings) {
-            settings = new GameSettings({
-                winProbability: 5,
-                maxFreeScratchesPerDay: 1,
-                scratchTokenPrice: 25000,
-                isGameActive: true,
-                resetTime: '00:00'
+        res.json({ message: 'User updated successfully', user });
+        
+        console.log(`✅ User updated by admin: ${user.name}`);
+        
+    } catch (error) {
+        console.error('❌ Admin user update error:', error);
+        
+        // Send more specific error messages
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ 
+                error: 'Validation failed', 
+                details: validationErrors 
             });
-            await settings.save();
         }
         
+        if (error.name === 'CastError') {
+            return res.status(400).json({ error: 'Invalid data format' });
+        }
+        
+        res.status(500).json({ 
+            error: 'Failed to update user',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
+    }
+});
+
+// Enhanced Trade Management
+app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status, limit = 100 } = req.query;
+        
+        let query = {};
+        if (status && ['active', 'completed', 'cancelled'].includes(status)) {
+            query.status = status;
+        }
+        
+        const trades = await Trade.find(query)
+            .populate('userId', 'name email phone')
+            .sort({ createdAt: -1 })
+            .limit(Math.min(parseInt(limit), 200));
+        
+        res.json({ trades });
+    } catch (error) {
+        console.error('❌ Admin trades error:', error);
+        res.status(500).json({ error: 'Failed to load trades' });
+    }
+});
+
+app.put('/api/admin/trade/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { forceResult } = req.body;
+        
+        if (forceResult && !['win', 'lose'].includes(forceResult)) {
+            return res.status(400).json({ error: 'Force result must be win or lose' });
+        }
+        
+        const trade = await Trade.findById(id).populate('userId', 'name');
+        if (!trade) {
+            return res.status(404).json({ error: 'Trade not found' });
+        }
+        
+        if (trade.status !== 'active') {
+            return res.status(400).json({ error: 'Can only control active trades' });
+        }
+        
+        trade.forceResult = forceResult || undefined;
+        await trade.save();
+        
+        await logActivity(req.userId, 'ADMIN_TRADE_CONTROL', `Controlled trade: ${trade._id} - ${forceResult || 'cleared'} for user ${trade.userId.name}`, req);
+        
+        res.json({ message: 'Trade control updated successfully' });
+        
+        console.log(`✅ Trade controlled by admin: ${trade._id} - ${forceResult || 'cleared'}`);
+        
+    } catch (error) {
+        console.error('❌ Admin trade control error:', error);
+        res.status(500).json({ error: 'Failed to control trade' });
+    }
+});
+
+// ========================================
+// ENHANCED DEPOSIT MANAGEMENT ROUTES dari Dokumen 2
+// ========================================
+
+// Enhanced Deposit Management dengan timeout dan error handling yang lebih baik
+app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res) => {
+    const startTime = Date.now();
+    
+    try {
+        console.log('📊 Loading admin deposits...');
+        
+        const { status, limit = 50 } = req.query; // Kurangi default limit
+        
+        // Tambahkan timeout untuk query
+        const queryTimeout = 15000; // 15 detik timeout
+        
+        let query = {};
+        if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+            query.status = status;
+        }
+        
+        console.log('🔍 Deposit query:', query);
+        
+        // Query dengan timeout dan pagination yang lebih efisien
+        const deposits = await Promise.race([
+            Deposit.find(query)
+                .populate({
+                    path: 'userId',
+                    select: 'name email phone',
+                    options: { 
+                        timeout: queryTimeout / 2,
+                        lean: true // Optimasi memory
+                    }
+                })
+                .sort({ createdAt: -1 })
+                .limit(Math.min(parseInt(limit), 100))
+                .lean() // Optimasi memory
+                .exec(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Query timeout')), queryTimeout)
+            )
+        ]);
+        
+        const endTime = Date.now();
+        console.log(`✅ Deposits loaded: ${deposits.length} records in ${endTime - startTime}ms`);
+        
+        // Filter data yang bermasalah
+        const cleanDeposits = deposits.filter(deposit => {
+            return deposit && deposit._id && deposit.amount;
+        });
+        
+        res.json({ 
+            deposits: cleanDeposits,
+            count: cleanDeposits.length,
+            queryTime: endTime - startTime,
+            status: 'success'
+        });
+        
+    } catch (error) {
+        const endTime = Date.now();
+        console.error('❌ Admin deposits error:', error);
+        console.error('⏱️ Query time before error:', endTime - startTime + 'ms');
+        
+        // Log detail error untuk debugging
+        if (error.message === 'Query timeout') {
+            console.error('🕐 Database query timeout - consider optimizing or increasing timeout');
+        } else if (error.name === 'MongoError') {
+            console.error('🗃️ MongoDB error:', error.message);
+        }
+        
+        // Return error dengan detail untuk debugging (production harus dihapus)
+        res.status(500).json({ 
+            error: 'Failed to load deposits',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Database error',
+            queryTime: endTime - startTime,
+            status: 'error'
+        });
+    }
+});
+
+// Tambahkan endpoint untuk check deposit count (untuk debugging)
+app.get('/api/admin/deposits/count', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const totalCount = await Deposit.countDocuments();
+        const pendingCount = await Deposit.countDocuments({ status: 'pending' });
+        const approvedCount = await Deposit.countDocuments({ status: 'approved' });
+        const rejectedCount = await Deposit.countDocuments({ status: 'rejected' });
+        
         res.json({
-            isGameActive: settings.isGameActive && !settings.maintenanceMode,
-            maxFreeScratchesPerDay: settings.maxFreeScratchesPerDay,
-            scratchTokenPrice: settings.scratchTokenPrice,
-            resetTime: settings.resetTime,
-            maintenanceMode: settings.maintenanceMode || false,
-            maintenanceMessage: settings.maintenanceMessage || 'System maintenance'
+            total: totalCount,
+            pending: pendingCount,
+            approved: approvedCount,
+            rejected: rejectedCount,
+            status: 'success'
         });
     } catch (error) {
-        logger.error('Get public settings error:', error);
-        res.status(500).json({ error: 'Server error' });
+        console.error('❌ Deposit count error:', error);
+        res.status(500).json({ error: 'Failed to get deposit count' });
     }
 });
 
-app.get('/api/public/bank-account', async (req, res) => {
+// Enhanced deposit processing dengan better error handling
+app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const startTime = Date.now();
+    
     try {
-        const account = await BankAccount.findOne({ isActive: true });
+        const { id } = req.params;
+        const { status, adminNotes } = req.body;
         
-        res.json(account || {
-            bankName: '',
-            accountNumber: '',
-            accountHolder: '',
-            message: 'Belum ada rekening aktif'
-        });
-    } catch (error) {
-        logger.error('Get bank account error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.get('/api/public/recent-winners', async (req, res) => {
-    try {
-        const { limit = 10 } = req.query;
+        console.log(`📝 Processing deposit ${id}:`, { status, adminNotes });
         
-        const winners = await Winner.find({ claimStatus: 'completed' })
-            .populate('userId', 'name')
-            .populate('prizeId', 'name value type')
-            .select('claimDate')
-            .sort({ claimDate: -1 })
-            .limit(parseInt(limit));
+        if (!['pending', 'approved', 'rejected'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+        
+        // Gunakan session untuk atomic operation
+        const session = await mongoose.startSession();
+        
+        try {
+            session.startTransaction();
             
-        // Anonymize user names for privacy
-        const anonymizedWinners = winners.map(winner => ({
-            userName: winner.userId.name.charAt(0) + '*'.repeat(winner.userId.name.length - 1),
-            prizeName: winner.prizeId.name,
-            prizeValue: winner.prizeId.value,
-            prizeType: winner.prizeId.type,
-            claimDate: winner.claimDate
-        }));
-        
-        res.json(anonymizedWinners);
-    } catch (error) {
-        logger.error('Get recent winners error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ========================================
-// 💾 DATABASE INITIALIZATION - Railway Ready + QRIS + PHONE ONLY
-// ========================================
-
-async function createDefaultAdmin() {
-    try {
-        console.log('🔧 Creating default admin...');
-        const adminExists = await Admin.findOne({ username: 'admin' });
-        
-        if (!adminExists) {
-            const hashedPassword = await bcrypt.hash('yusrizal1993', 12);
+            const deposit = await Deposit.findById(id)
+                .populate('userId')
+                .session(session);
+                
+            if (!deposit) {
+                await session.abortTransaction();
+                return res.status(404).json({ error: 'Deposit not found' });
+            }
             
-            const admin = new Admin({
-                username: 'admin',
-                password: hashedPassword,
-                name: 'Super Administrator',
-                role: 'super_admin',
-                permissions: ['all'],
-                isActive: true
+            if (deposit.status !== 'pending') {
+                await session.abortTransaction();
+                return res.status(400).json({ error: 'Deposit already processed' });
+            }
+            
+            // Update deposit
+            deposit.status = status;
+            deposit.adminNotes = adminNotes || '';
+            deposit.processedAt = new Date();
+            
+            // If approved, add to user balance
+            if (status === 'approved') {
+                if (!deposit.userId) {
+                    await session.abortTransaction();
+                    return res.status(400).json({ error: 'User not found for this deposit' });
+                }
+                
+                deposit.userId.balance += deposit.amount;
+                await deposit.userId.save({ session });
+                
+                console.log(`💰 Added ${deposit.amount} to user ${deposit.userId.name} balance`);
+                
+                // Notify via socket
+                setTimeout(() => {
+                    try {
+                        io.to(deposit.userId._id.toString()).emit('depositApproved', {
+                            amount: deposit.amount,
+                            newBalance: deposit.userId.balance,
+                            message: 'Your deposit has been approved!'
+                        });
+                    } catch (socketError) {
+                        console.error('❌ Socket notification error:', socketError);
+                    }
+                }, 100);
+            }
+            
+            await deposit.save({ session });
+            await session.commitTransaction();
+            
+            // Enhanced activity logging
+            await logActivity(
+                req.userId, 
+                'ADMIN_DEPOSIT_PROCESS', 
+                `${status.toUpperCase()} deposit: ${formatCurrency(deposit.amount)} for ${deposit.userId.name}`,
+                req
+            );
+            
+            const endTime = Date.now();
+            console.log(`✅ Deposit ${status} successfully in ${endTime - startTime}ms`);
+            
+            res.json({ 
+                message: `Deposit ${status} successfully`,
+                deposit: {
+                    _id: deposit._id,
+                    status: deposit.status,
+                    processedAt: deposit.processedAt
+                },
+                queryTime: endTime - startTime,
+                status: 'success'
             });
             
-            await admin.save();
-            console.log('✅ Default admin created: admin / yusrizal1993');
-            logger.info('✅ Default admin created: admin / yusrizal1993');
+        } catch (transactionError) {
+            await session.abortTransaction();
+            throw transactionError;
+        } finally {
+            session.endSession();
+        }
+        
+    } catch (error) {
+        const endTime = Date.now();
+        console.error('❌ Admin deposit process error:', error);
+        console.error('⏱️ Process time before error:', endTime - startTime + 'ms');
+        
+        res.status(500).json({ 
+            error: 'Failed to process deposit',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Processing error',
+            queryTime: endTime - startTime,
+            status: 'error'
+        });
+    }
+});
+
+// Add database health check endpoint
+app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const startTime = Date.now();
+        
+        // Test basic queries
+        const [userCount, depositCount, tradeCount] = await Promise.all([
+            User.countDocuments().maxTimeMS(5000),
+            Deposit.countDocuments().maxTimeMS(5000),
+            Trade.countDocuments().maxTimeMS(5000)
+        ]);
+        
+        const endTime = Date.now();
+        const queryTime = endTime - startTime;
+        
+        const health = {
+            status: 'healthy',
+            queryTime: queryTime,
+            collections: {
+                users: userCount,
+                deposits: depositCount,
+                trades: tradeCount
+            },
+            mongodb: {
+                readyState: mongoose.connection.readyState,
+                host: mongoose.connection.host,
+                name: mongoose.connection.name
+            }
+        };
+        
+        if (queryTime > 3000) {
+            health.warning = 'Slow database response';
+        }
+        
+        res.json(health);
+        
+    } catch (error) {
+        console.error('❌ Database health check failed:', error);
+        res.status(500).json({
+            status: 'unhealthy',
+            error: error.message,
+            mongodb: {
+                readyState: mongoose.connection.readyState
+            }
+        });
+    }
+});
+
+// Enhanced Withdrawal Management
+app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status, limit = 100 } = req.query;
+        
+        let query = {};
+        if (status && ['pending', 'approved', 'rejected', 'processed'].includes(status)) {
+            query.status = status;
+        }
+        
+        const withdrawals = await Withdrawal.find(query)
+            .populate('userId', 'name email phone')
+            .sort({ createdAt: -1 })
+            .limit(Math.min(parseInt(limit), 200));
+        
+        res.json({ withdrawals });
+    } catch (error) {
+        console.error('❌ Admin withdrawals error:', error);
+        res.status(500).json({ error: 'Failed to load withdrawals' });
+    }
+});
+
+app.put('/api/admin/withdrawal/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, adminNotes } = req.body;
+        
+        if (!['pending', 'approved', 'rejected', 'processed'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+        
+        const withdrawal = await Withdrawal.findById(id).populate('userId');
+        if (!withdrawal) {
+            return res.status(404).json({ error: 'Withdrawal not found' });
+        }
+        
+        withdrawal.status = status;
+        withdrawal.adminNotes = adminNotes || '';
+        withdrawal.processedAt = new Date();
+        
+        // If rejected, return money to user balance
+        if (status === 'rejected') {
+            withdrawal.userId.balance += withdrawal.amount;
+            await withdrawal.userId.save();
+            
+            // Notify user via socket
+            io.to(withdrawal.userId._id.toString()).emit('withdrawalRejected', {
+                amount: withdrawal.amount,
+                newBalance: withdrawal.userId.balance,
+                message: 'Your withdrawal request has been rejected and funds returned to your account.'
+            });
+        } else if (status === 'approved') {
+            // Notify user via socket
+            io.to(withdrawal.userId._id.toString()).emit('withdrawalApproved', {
+                amount: withdrawal.finalAmount,
+                message: 'Your withdrawal request has been approved and will be processed soon.'
+            });
+        }
+        
+        await withdrawal.save();
+        
+        await logActivity(req.userId, 'ADMIN_WITHDRAWAL_PROCESS', `${status.toUpperCase()} withdrawal: ${formatCurrency(withdrawal.amount)} for ${withdrawal.userId.name}`, req);
+        
+        res.json({ message: `Withdrawal ${status} successfully` });
+        
+        console.log(`✅ Withdrawal ${status} by admin: ${formatCurrency(withdrawal.amount)} for ${withdrawal.userId.name}`);
+        
+    } catch (error) {
+        console.error('❌ Admin withdrawal process error:', error);
+        res.status(500).json({ error: 'Failed to process withdrawal' });
+    }
+});
+
+// Enhanced Bank Account Management
+app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const accounts = await BankAccount.find().sort({ createdAt: -1 });
+        res.json({ accounts });
+    } catch (error) {
+        console.error('❌ Admin bank accounts error:', error);
+        res.status(500).json({ error: 'Failed to load bank accounts' });
+    }
+});
+
+app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { bankName, accountNumber, accountHolder, note } = req.body;
+        
+        if (!bankName || !accountNumber || !accountHolder) {
+            return res.status(400).json({ error: 'Bank name, account number, and account holder are required' });
+        }
+        
+        // Check for duplicate account
+        const existingAccount = await BankAccount.findOne({ 
+            bankName: bankName.trim(), 
+            accountNumber: accountNumber.trim() 
+        });
+        
+        if (existingAccount) {
+            return res.status(400).json({ error: 'Bank account already exists' });
+        }
+        
+        const account = new BankAccount({
+            bankName: bankName.trim(),
+            accountNumber: accountNumber.trim(),
+            accountHolder: accountHolder.trim(),
+            note: note ? note.trim() : ''
+        });
+        
+        await account.save();
+        
+        await logActivity(req.userId, 'ADMIN_BANK_CREATE', `Created bank account: ${bankName} - ${accountNumber}`, req);
+        
+        res.status(201).json({ 
+            message: 'Bank account created successfully',
+            account
+        });
+        
+        console.log(`✅ Bank account created by admin: ${bankName} - ${accountNumber}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account create error:', error);
+        res.status(500).json({ error: 'Failed to create bank account' });
+    }
+});
+
+app.put('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { bankName, accountNumber, accountHolder, note, isActive } = req.body;
+        
+        if (!bankName || !accountNumber || !accountHolder) {
+            return res.status(400).json({ error: 'Bank name, account number, and account holder are required' });
+        }
+        
+        const updateData = {
+            bankName: bankName.trim(),
+            accountNumber: accountNumber.trim(),
+            accountHolder: accountHolder.trim(),
+            note: note ? note.trim() : '',
+            isActive: Boolean(isActive)
+        };
+        
+        const account = await BankAccount.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+        
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_UPDATE', `Updated bank account: ${account.bankName}`, req);
+        
+        res.json({ 
+            message: 'Bank account updated successfully',
+            account
+        });
+        
+        console.log(`✅ Bank account updated by admin: ${account.bankName}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account update error:', error);
+        res.status(500).json({ error: 'Failed to update bank account' });
+    }
+});
+
+app.patch('/api/admin/bank-accounts/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const account = await BankAccount.findById(id);
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        account.isActive = !account.isActive;
+        await account.save();
+        
+        await logActivity(req.userId, 'ADMIN_BANK_TOGGLE', `${account.isActive ? 'Activated' : 'Deactivated'} bank account: ${account.bankName}`, req);
+        
+        res.json({ 
+            message: `Bank account ${account.isActive ? 'activated' : 'deactivated'} successfully`,
+            account
+        });
+        
+        console.log(`✅ Bank account ${account.isActive ? 'activated' : 'deactivated'} by admin: ${account.bankName}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account toggle error:', error);
+        res.status(500).json({ error: 'Failed to toggle bank account' });
+    }
+});
+
+app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const account = await BankAccount.findByIdAndDelete(id);
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_DELETE', `Deleted bank account: ${account.bankName}`, req);
+        
+        res.json({ message: 'Bank account deleted successfully' });
+        
+        console.log(`✅ Bank account deleted by admin: ${account.bankName}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account delete error:', error);
+        res.status(500).json({ error: 'Failed to delete bank account' });
+    }
+});
+
+// ========================================
+// SOCKET.IO HANDLING (tetap sama)
+// ========================================
+
+io.on('connection', (socket) => {
+    console.log('👤 User connected:', socket.id);
+    
+    socket.on('join', (userId) => {
+        if (userId && typeof userId === 'string') {
+            socket.join(userId);
+            console.log(`👤 User ${userId} joined room`);
+        }
+    });
+    
+    socket.on('subscribe_prices', () => {
+        socket.join('price_updates');
+        console.log('📊 User subscribed to price updates');
+    });
+    
+    socket.on('subscribe_charts', (data) => {
+        try {
+            const { symbol, timeframe } = data;
+            if (symbol && timeframe) {
+                console.log(`📊 User subscribed to chart: ${symbol}/${timeframe}`);
+                
+                // Join specific chart room
+                socket.join(`chart_${symbol}_${timeframe}`);
+                
+                // Send current chart data if available
+                const key = `${symbol}-${timeframe}`;
+                const chartData = chartDataStore.get(key);
+                if (chartData && chartData.length > 0) {
+                    const lastCandle = chartData[chartData.length - 1];
+                    if (lastCandle && lastCandle.time) {
+                        socket.emit('chartUpdate', {
+                            symbol,
+                            timeframe,
+                            candle: lastCandle
+                        });
+                        console.log(`📊 Sent initial chart data to user: ${symbol}/${timeframe}`);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error in chart subscription:', error);
+        }
+    });
+    
+    socket.on('unsubscribe_charts', (data) => {
+        try {
+            const { symbol, timeframe } = data;
+            if (symbol && timeframe) {
+                socket.leave(`chart_${symbol}_${timeframe}`);
+                console.log(`📊 User unsubscribed from chart: ${symbol}/${timeframe}`);
+            }
+        } catch (error) {
+            console.error('❌ Error in chart unsubscription:', error);
+        }
+    });
+    
+    socket.on('ping', () => {
+        socket.emit('pong');
+    });
+    
+    socket.on('disconnect', (reason) => {
+        console.log('👤 User disconnected:', socket.id, 'Reason:', reason);
+    });
+    
+    socket.on('error', (error) => {
+        console.error('❌ Socket error:', error);
+    });
+});
+
+// Enhanced price broadcasting
+setInterval(() => {
+    if (isInitialized) {
+        io.to('price_updates').emit('priceHeartbeat', {
+            timestamp: Date.now(),
+            message: 'Price updates active'
+        });
+    }
+}, 30000); // Every 30 seconds
+
+// ========================================
+// ERROR HANDLING (menggunakan yang dari Dokumen 2)
+// ========================================
+
+// Enhanced global error handler
+app.use((error, req, res, next) => {
+    console.error('❌ Global error:', error);
+    
+    // Log error details
+    console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        url: req.url,
+        method: req.method,
+        ip: req.ip,
+        userAgent: req.get('User-Agent')
+    });
+    
+    // Don't leak error details in production
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    
+    res.status(error.status || 500).json({ 
+        error: 'Internal server error',
+        message: isDevelopment ? error.message : 'Something went wrong',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Enhanced 404 handler
+app.use('*', (req, res) => {
+    console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ 
+        error: 'Route not found',
+        method: req.method,
+        path: req.originalUrl,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ========================================
+// GRACEFUL SHUTDOWN (tetap sama)
+// ========================================
+
+process.on('SIGTERM', () => {
+    console.log('💤 SIGTERM received, shutting down gracefully');
+    server.close(() => {
+        console.log('✅ Process terminated');
+        mongoose.connection.close();
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('💤 SIGINT received, shutting down gracefully');
+    server.close(() => {
+        console.log('✅ Process terminated');
+        mongoose.connection.close();
+        process.exit(0);
+    });
+});
+
+// ========================================
+// SERVER START (menggunakan yang dari Dokumen 2 dengan monitoring)
+// ========================================
+
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+    try {
+        // Connect to database first
+        await mongoose.connect(process.env.MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            serverSelectionTimeoutMS: 10000,
+            socketTimeoutMS: 45000,
+            maxPoolSize: 10,
+            retryWrites: true,
+            w: 'majority'
+        });
+        
+        console.log('✅ Connected to MongoDB');
+        
+        // Call after database connection
+        if (mongoose.connection.readyState === 1) {
+            ensureIndexes();
         } else {
-            console.log('✅ Default admin already exists');
+            mongoose.connection.once('connected', ensureIndexes);
         }
-    } catch (error) {
-        console.error('❌ Error creating default admin:', error);
-        logger.error('Error creating default admin:', error);
-    }
-}
-
-async function createDefaultSettings() {
-    try {
-        const settingsExist = await GameSettings.findOne();
         
-        if (!settingsExist) {
-            const settings = new GameSettings({
-                winProbability: 5,
-                maxFreeScratchesPerDay: 1,
-                scratchTokenPrice: 25000,
-                isGameActive: true,
-                resetTime: '00:00',
-                maintenanceMode: false,
-                maintenanceMessage: 'System maintenance',
-                // 🆕 Daily token distribution settings
-                dailyTokenDistribution: true,
-                dailyTokenAmount: 1,
-                distributionTime: '00:00',
-                allowManualTokens: true
+        // Initialize default admin user
+        const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
+        if (!adminExists) {
+            const hashedPassword = await bcrypt.hash('admin123', 12);
+            const admin = new User({
+                name: 'Administrator',
+                email: 'admin@tradestation.com',
+                password: hashedPassword,
+                balance: 0,
+                accountType: 'premium',
+                referralCode: 'ADMIN001',
+                adminSettings: {
+                    profitCollapse: 'normal',
+                    profitPercentage: 80,
+                    forceWin: false,
+                    forceWinRate: 0
+                },
+                stats: {
+                    totalTrades: 0,
+                    winTrades: 0,
+                    loseTrades: 0
+                }
             });
-            
-            await settings.save();
-            logger.info('✅ Default game settings created with daily token distribution');
+            await admin.save();
+            console.log('✅ Default admin user created (admin@tradestation.com / admin123)');
+            console.log('✅ Admin settings:', admin.adminSettings);
+        } else {
+            console.log('✅ Admin user already exists');
+            console.log('✅ Admin settings:', adminExists.adminSettings);
         }
-    } catch (error) {
-        logger.error('Error creating default settings:', error);
-    }
-}
-
-async function createDefaultQRISConfig() {
-    try {
-        const qrisConfigExist = await QRISConfig.findOne();
         
-        if (!qrisConfigExist) {
-            const qrisConfig = new QRISConfig({
-                isActive: true,
-                merchantName: 'Gosok Angka Hoki',
-                merchantId: 'GOSOKANGKA001',
-                qrisImageUrl: '/api/payment/qris',
-                instructions: 'Scan QRIS di atas, transfer sesuai nominal, lalu konfirmasi melalui Live Chat',
-                autoApproval: false,
-                maxAmount: 10000000,
-                minAmount: 25000
-            });
-            
-            await qrisConfig.save();
-            logger.info('✅ Default QRIS configuration created');
-        }
-    } catch (error) {
-        logger.error('Error creating default QRIS config:', error);
-    }
-}
-
-async function createSamplePrizes() {
-    try {
-        const prizeCount = await Prize.countDocuments();
-        
-        if (prizeCount === 0) {
-            const samplePrizes = [
+        // Initialize sample bank accounts
+        const bankExists = await BankAccount.findOne();
+        if (!bankExists) {
+            const sampleBanks = [
                 {
-                    winningNumber: '1093',
-                    name: 'iPhone 15 Pro Max',
-                    type: 'physical',
-                    value: 18000000,
-                    stock: 2,
-                    originalStock: 2,
-                    isActive: true,
-                    category: 'electronics',
-                    priority: 10,
-                    description: 'Latest iPhone'
+                    bankName: 'Bank BCA',
+                    accountNumber: '1234567890',
+                    accountHolder: 'TradeStation Official',
+                    note: 'Primary deposit account',
+                    isActive: true
                 },
                 {
-                    winningNumber: '2415',
-                    name: 'Cash Prize 100 Million',
-                    type: 'cash',
-                    value: 100000000,
-                    stock: 1,
-                    originalStock: 1,
-                    isActive: true,
-                    category: 'cash',
-                    priority: 20,
-                    description: 'Grand cash prize'
+                    bankName: 'Bank Mandiri',
+                    accountNumber: '0987654321',
+                    accountHolder: 'TradeStation Official',
+                    note: 'Secondary deposit account',
+                    isActive: true
                 },
                 {
-                    winningNumber: '6451',
-                    name: 'Uang Tunai Rp. 250.000',
-                    type: 'cash',
-                    value: 250000,
-                    stock: 10,
-                    originalStock: 10,
-                    isActive: true,
-                    category: 'cash',
-                    priority: 3,
-                    description: 'Cash prize 250rb'
-                },
-                {
-                    winningNumber: '9026',
-                    name: 'Shopee Voucher 1 Million',
-                    type: 'voucher',
-                    value: 1000000,
-                    stock: 5,
-                    originalStock: 5,
-                    isActive: true,
-                    category: 'voucher',
-                    priority: 8,
-                    description: 'Premium shopping voucher'
-                },
-                {
-                    winningNumber: '7731',
-                    name: 'Uang Tunai Rp. 500.000',
-                    type: 'cash',
-                    value: 500000,
-                    stock: 8,
-                    originalStock: 8,
-                    isActive: true,
-                    category: 'cash',
-                    priority: 5,
-                    description: 'Cash prize 500rb'
+                    bankName: 'Bank BRI',
+                    accountNumber: '5555666677',
+                    accountHolder: 'TradeStation Official',
+                    note: 'Alternative deposit account',
+                    isActive: true
                 }
             ];
             
-            await Prize.insertMany(samplePrizes);
-            logger.info('✅ Sample prizes created with correct mapping');
-        }
-    } catch (error) {
-        logger.error('Error creating sample prizes:', error);
-    }
-}
-
-async function createDefaultBankAccount() {
-    try {
-        const bankExists = await BankAccount.findOne({ isActive: true });
-        
-        if (!bankExists) {
-            const defaultBank = new BankAccount({
-                bankName: 'BCA',
-                accountNumber: '1234567890',
-                accountHolder: 'GOSOK ANGKA ADMIN',
-                isActive: true
-            });
-            
-            await defaultBank.save();
-            logger.info('✅ Default bank account created');
-        }
-    } catch (error) {
-        logger.error('Error creating default bank account:', error);
-    }
-}
-
-async function initializeDatabase() {
-    try {
-        console.log('🚀 Starting Railway database initialization with PHONE ONLY + ONLINE TRACKING...');
-        
-        let retries = 0;
-        const maxRetries = 10;
-        
-        while (retries < maxRetries) {
-            if (mongoose.connection.readyState === 1) {
-                console.log('📊 Database connected, initializing data...');
-                break;
+            for (const bank of sampleBanks) {
+                await BankAccount.create(bank);
             }
-            
-            console.log(`⏳ Waiting for database connection... (${retries + 1}/${maxRetries})`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            retries++;
+            console.log('✅ Sample bank accounts created');
         }
         
-        if (mongoose.connection.readyState !== 1) {
-            console.log('⚠️ Database not connected yet, but server will continue...');
-            return;
+        // Initialize prices
+        await initializePrices();
+        console.log('✅ Prices initialized');
+        
+        // Initialize chart data for all symbols
+        console.log('📊 Initializing chart data for all symbols...');
+        const symbols = await Price.find();
+        
+        for (const symbol of symbols) {
+            await initializeChartDataForSymbol(symbol.symbol);
         }
         
-        await createDefaultAdmin();
-        await createDefaultSettings();
-        await createDefaultQRISConfig();
-        await createSamplePrizes();
-        await createDefaultBankAccount();
+        console.log(`✅ Chart data initialized for ${symbols.length} symbols, total datasets: ${chartDataStore.size}`);
         
-        console.log('🎉 Railway database initialization with PHONE ONLY + ONLINE TRACKING completed!');
-        logger.info('🎉 Railway database initialization with PHONE ONLY + ONLINE TRACKING completed!');
+        // Mark as initialized
+        isInitialized = true;
+        
+        // Start background processes
+        simulatePriceUpdates();
+        checkTradesToComplete();
+        console.log('✅ Background processes started');
+        
+        // Start server
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log(`
+🚀 TradeStation Backend Server Started Successfully! - BEST COMBINED VERSION
+📍 Port: ${PORT}
+🌍 Environment: ${process.env.NODE_ENV || 'development'}
+📧 Enhanced Email/Phone Authentication: ✅ (From Dokumen 1 - Best Registration)
+📱 Robust Admin Panel: ✅ (From Dokumen 2 - With Timeouts & Optimization)
+🛡️  Performance for Many Users: ✅ (Database Optimization & Monitoring)
+📊 Real-time Chart Data: ✅ Enhanced
+💳 Bank Management: ✅ Enabled
+🎯 Trading Control: ✅ Advanced
+💰 Profit Settings: ✅ Dynamic
+⚙️  Admin Panel: ✅ Complete with Timeouts
+🔄 Background Processes: ✅ Running
+🗃️  Database: ✅ Connected with Monitoring
+📡 Socket.IO: ✅ Ready
+⏰ Timestamp: ${new Date().toISOString()}
+
+🔗 API Endpoints:
+   • Health Check: GET /api/health
+   • Database Health: GET /api/admin/health/database
+   • Authentication: POST /api/login, /api/register (Enhanced)
+   • Trading: POST /api/trade, GET /api/trades
+   • Charts: GET /api/chart/:symbol/:timeframe
+   • Admin Panel: /api/admin/* (Enhanced with Timeouts)
+
+📋 Admin Credentials:
+   • Email: admin@tradestation.com
+   • Password: admin123
+
+✨ COMBINED BEST FEATURES:
+   ✅ Enhanced Registration System (Dokumen 1)
+   ✅ Robust Admin Deposit Management (Dokumen 2)
+   ✅ Database Optimization & Monitoring
+   ✅ Memory Usage Tracking
+   ✅ Query Timeout Handling
+   ✅ Better Error Handling for Production
+   ✅ Indonesian Phone Number Validation
+   ✅ Transaction Atomic Operations
+   ✅ Performance Optimization for High Load
+
+🎯 Ready to serve trading requests with optimal performance!
+            `);
+        });
+        
     } catch (error) {
-        logger.error('Database initialization error:', error);
+        console.error('❌ Failed to start server:', error);
+        process.exit(1);
     }
 }
 
-// Admin Check/Create endpoint
-app.get('/api/check-create-admin-2024', async (req, res) => {
-    try {
-        const existingAdmin = await Admin.findOne({ username: 'admin' });
-        
-        if (existingAdmin) {
-            const hashedPassword = await bcrypt.hash('yusrizal1993', 12);
-            existingAdmin.password = hashedPassword;
-            existingAdmin.name = existingAdmin.name || 'Super Administrator';
-            existingAdmin.isActive = true;
-            existingAdmin.loginAttempts = 0;
-            existingAdmin.lockedUntil = undefined;
-            await existingAdmin.save();
-            
-            res.json({ 
-                message: 'Admin exists and password reset to: yusrizal1993',
-                username: existingAdmin.username,
-                name: existingAdmin.name,
-                status: 'password_reset'
-            });
-        } else {
-            const hashedPassword = await bcrypt.hash('yusrizal1993', 12);
-            const newAdmin = new Admin({
-                username: 'admin',
-                password: hashedPassword,
-                name: 'Super Administrator',
-                role: 'super_admin',
-                permissions: ['all'],
-                isActive: true
-            });
-            await newAdmin.save();
-            
-            res.json({ 
-                message: 'New admin created with password: yusrizal1993',
-                username: newAdmin.username,
-                name: newAdmin.name,
-                status: 'created'
-            });
-        }
-    } catch (error) {
-        console.error('Check/Create admin error:', error);
-        res.status(500).json({ 
-            error: error.message,
-            status: 'error',
-            details: error.errors ? Object.keys(error.errors) : null
-        });
-    }
-});
+// Start the server
+startServer();
 
-// ========================================
-// 🔧 DEBUG & TESTING ENDPOINTS
-// ========================================
-
-app.get('/api/debug/win-rate-test/:userId', verifyToken, verifyAdmin, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { iterations = 100 } = req.query;
-        
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan' });
-        }
-        
-        const settings = await GameSettings.findOne();
-        const winRate = user.customWinRate !== null ? user.customWinRate : settings.winProbability;
-        
-        let winCount = 0;
-        const results = [];
-        
-        for (let i = 0; i < iterations; i++) {
-            const randomChance = Math.random() * 100;
-            const willWin = randomChance <= winRate;
-            if (willWin) winCount++;
-            
-            results.push({
-                iteration: i + 1,
-                randomRoll: randomChance.toFixed(2),
-                willWin,
-                winRate
-            });
-        }
-        
-        const actualWinRate = (winCount / iterations) * 100;
-        
-        res.json({
-            user: {
-                name: user.name,
-                phoneNumber: formatPhoneNumber(user.phoneNumber),
-                customWinRate: user.customWinRate,
-                globalWinRate: settings.winProbability
-            },
-            test: {
-                iterations,
-                expectedWinRate: winRate,
-                actualWinRate: actualWinRate.toFixed(2),
-                winCount,
-                lossCount: iterations - winCount,
-                deviation: Math.abs(winRate - actualWinRate).toFixed(2)
-            },
-            results: results.slice(0, 10) // Show first 10 results as sample
-        });
-    } catch (error) {
-        logger.error('Win rate test error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-app.get('/api/debug/system-info', verifyToken, verifyAdmin, (req, res) => {
-    res.json({
-        version: '7.6.0-phone-only-online-tracking',
-        environment: process.env.NODE_ENV,
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        platform: process.platform,
-        nodeVersion: process.version,
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        cors: {
-            allowedOrigins: allowedOrigins.length,
-            status: 'Enhanced & Secure'
-        },
-        features: {
-            phoneOnlyRegistration: 'Active ✅',
-            onlineUserTracking: 'Active ✅',
-            dailyTokenDistribution: 'Available ✅',
-            manualTokenAddition: 'Available ✅',
-            qrisPayment: 'Available',
-            bankTransfer: 'Available',
-            winRateLogic: 'Fixed',
-            adminPanel: 'Complete & Functional',
-            realTimeSync: 'Active'
-        },
-        onlineUsers: getOnlineUsers()
-    });
-});
-
-// ========================================
-// ⚠️ ERROR HANDLING - Railway Production
-// ========================================
-
-process.on('uncaughtException', (err) => {
-    logger.error('Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled Rejection:', reason);
-});
-
-// 404 handler
-app.use((req, res) => {
-    res.status(404).json({ 
-        error: 'Endpoint not found',
-        path: req.path,
-        version: '7.6.0-phone-only-online-tracking'
-    });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-    logger.error('Global error:', err.message);
-    
-    const status = err.status || 500;
-    const message = process.env.NODE_ENV === 'production' ? 
-        'Internal server error' : 
-        err.message;
-    
-    res.status(status).json({ 
-        error: message,
-        timestamp: new Date().toISOString(),
-        version: '7.6.0-phone-only-online-tracking'
-    });
-});
-
-// ========================================
-// 🚀 START RAILWAY SERVER - v7.6 PHONE ONLY + ONLINE TRACKING
-// ========================================
-
-const PORT = process.env.PORT || 5000;
-const HOST = '0.0.0.0';
-
-server.listen(PORT, HOST, async () => {
-    console.log('========================================');
-    console.log('🎯 GOSOK ANGKA BACKEND - RAILWAY v7.6 PHONE ONLY + ONLINE TRACKING');
-    console.log('========================================');
-    console.log(`✅ Server running on ${HOST}:${PORT}`);
-    console.log(`🌐 Environment: ${process.env.NODE_ENV || 'production'}`);
-    console.log(`📡 Railway URL: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'gosokangka-backend-production-e9fa.up.railway.app'}`);
-    console.log(`🔌 Socket.IO: Enhanced with CORS Fixed + QRIS + Online Tracking`);
-    console.log(`📊 Database: MongoDB Atlas Complete with QRIS Support`);
-    console.log(`🔐 Security: Production ready`);
-    console.log(`💰 Admin Panel: 100% Compatible + ALL ENDPOINTS FUNCTIONAL`);
-    console.log(`❤️ Health Check: /health (Railway optimized)`);
-    console.log(`👤 Default Admin: admin / yusrizal1993`);
-    console.log(`🌐 CORS: Enhanced & Secure configuration`);
-    console.log(`🎯 WIN RATE LOGIC: COMPLETELY FIXED!`);
-    console.log(`💳 QRIS PAYMENT: FULLY IMPLEMENTED!`);
-    console.log(`📱 PHONE ONLY REGISTRATION: ACTIVE!`);
-    console.log(`👥 REALTIME ONLINE TRACKING: ACTIVE!`);
-    console.log(`🎁 DAILY TOKEN DISTRIBUTION: AVAILABLE!`);
-    console.log(`➕ MANUAL TOKEN ADDITION: AVAILABLE!`);
-    console.log('========================================');
-    console.log('🎉 FEATURES v7.6 PHONE ONLY + ONLINE TRACKING:');
-    console.log('   ✅ 📱 PHONE ONLY REGISTRATION - No email required');
-    console.log('   ✅ 👥 REALTIME ONLINE USERS TRACKING for admin');
-    console.log('   ✅ 🎁 DAILY TOKEN DISTRIBUTION automated & manual');
-    console.log('   ✅ ➕ MANUAL TOKEN ADDITION by admin');
-    console.log('   ✅ WIN RATE LOGIC completely fixed');
-    console.log('   ✅ QRIS Payment System fully implemented');
-    console.log('   ✅ QRIS Admin Management available');
-    console.log('   ✅ QRIS Real-time notifications');
-    console.log('   ✅ Bank Transfer tetap available');
-    console.log('   ✅ Prepare phase controls winning numbers');
-    console.log('   ✅ Debug endpoints untuk testing win rate');
-    console.log('   ✅ ALL admin endpoints working perfect');
-    console.log('   ✅ ALL user endpoints working perfect');
-    console.log('   ✅ ALL game endpoints working perfect');
-    console.log('   ✅ ALL public endpoints working perfect');
-    console.log('   ✅ ALL QRIS endpoints working perfect');
-    console.log('   ✅ Token purchase management LENGKAP');
-    console.log('   ✅ Winners management LENGKAP');
-    console.log('   ✅ Bank account management LENGKAP');
-    console.log('   ✅ QRIS configuration management LENGKAP');
-    console.log('   ✅ Analytics & reporting LENGKAP');
-    console.log('   ✅ Socket.IO real-time features LENGKAP');
-    console.log('   ✅ Security & rate limiting');
-    console.log('   ✅ Forced winning tetap berfungsi perfect');
-    console.log('   ✅ User management endpoints ALL FUNCTIONAL');
-    console.log('   ✅ Prizes management endpoints ALL FUNCTIONAL');
-    console.log('   ✅ Game settings endpoints ALL FUNCTIONAL');
-    console.log('   ✅ Winners management endpoints ALL FUNCTIONAL');
-    console.log('   ✅ History management endpoints ALL FUNCTIONAL');
-    console.log('   ✅ System status endpoints ALL FUNCTIONAL');
-    console.log('   ✅ 📱 Phone number formatting & validation');
-    console.log('   ✅ 👥 Admin dashboard shows online users realtime');
-    console.log('   ✅ 🎁 Daily distribution of free tokens to active users');
-    console.log('   ✅ ➕ Admin can manually add tokens to any user');
-    console.log('========================================');
-    console.log('💎 STATUS: PRODUCTION READY - PHONE ONLY + REALTIME ONLINE TRACKING ✅');
-    console.log('🔗 Frontend: Ready for gosokangkahoki.com');
-    console.log('📱 Mobile: Fully optimized dengan phone only registration');
-    console.log('🚀 Performance: Enhanced & optimized');
-    console.log('🎯 Admin Panel: 100% Compatible - SEMUA FITUR + ONLINE USERS');
-    console.log('💳 Payment: Bank Transfer + QRIS Available');
-    console.log('🌐 CORS: All domains properly supported');
-    console.log('🎯 WIN RATE CONTROL: 100% ACCURATE & WORKING!');
-    console.log('💳 QRIS PAYMENT: 100% FUNCTIONAL & TESTED!');
-    console.log('📱 PHONE REGISTRATION: Simple & Secure!');
-    console.log('👥 ONLINE TRACKING: Realtime User Monitoring!');
-    console.log('🎁 TOKEN SYSTEM: Automated Daily + Manual Addition!');
-    console.log('========================================');
-    console.log('🔧 KEY CHANGES v7.6:');
-    console.log('   📱 Registration hanya pakai nomor HP (no email)');
-    console.log('   👥 Dashboard admin show online users realtime');
-    console.log('   🎁 Daily token distribution otomatis midnight');
-    console.log('   ➕ Admin bisa add token manual ke user');
-    console.log('   📞 Phone number formatting & normalization');
-    console.log('   🔄 Socket.IO enhanced with online tracking');
-    console.log('   ⚡ Realtime updates for admin panel');
-    console.log('   🎯 All fitur lama tetap functional 100%');
-    console.log('========================================');
-    
-    // Initialize database
-    console.log('🔧 Starting database initialization with PHONE ONLY + ONLINE TRACKING...');
-    await initializeDatabase();
-    
-    logger.info('🚀 Railway server v7.6 PHONE ONLY + ONLINE TRACKING started successfully - ALL FEATURES ✅', {
-        port: PORT,
-        host: HOST,
-        version: '7.6.0-phone-only-online-tracking',
-        database: 'MongoDB Atlas Ready with QRIS',
-        admin: 'admin/yusrizal1993',
-        adminPanel: '100% Compatible - ALL FEATURES + ONLINE TRACKING',
-        cors: 'Enhanced & Secure ✅',
-        phoneOnlyRegistration: 'ACTIVE - No Email Required ✅',
-        onlineUserTracking: 'REALTIME TRACKING ACTIVE ✅',
-        dailyTokenDistribution: 'AUTOMATED & MANUAL ✅',
-        winRateLogic: 'COMPLETELY FIXED & WORKING ✅',
-        qrisPayment: 'FULLY IMPLEMENTED & FUNCTIONAL ✅',
-        status: 'PRODUCTION READY - PHONE ONLY + REALTIME ONLINE TRACKING ✅'
-    });
-});
-
-console.log('✅ server.js v7.6 COMPLETE - Railway Production PHONE ONLY + ONLINE TRACKING!');
+module.exports = app;
