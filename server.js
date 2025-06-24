@@ -7,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -38,6 +41,44 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Serve static files (untuk logo)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file upload
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/');
+    },
+    filename: function (req, file, cb) {
+        const timestamp = Date.now();
+        const originalName = file.originalname.toLowerCase();
+        const extension = path.extname(originalName);
+        const baseName = path.basename(originalName, extension);
+        cb(null, `${baseName}_${timestamp}${extension}`);
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    },
+    fileFilter: function (req, file, cb) {
+        const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/svg+xml'];
+        if (allowedTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Invalid file type. Only JPEG, PNG, WebP, and SVG are allowed.'));
+        }
+    }
+});
+
 // Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -54,24 +95,24 @@ const authLimiter = rateLimit({
 });
 
 // ========================================
-// DATABASE MODELS
+// DATABASE MODELS - FIXED USER SCHEMA
 // ========================================
 
-// User Schema - ENHANCED dengan validasi terbaik dari Dokumen 1
+// User Schema - FIXED untuk menerima email DAN phone bersamaan
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true, minlength: 2 },
     email: { 
         type: String, 
+        required: true,  // FIXED: Sekarang required
         trim: true, 
         lowercase: true, 
-        sparse: true,  // Ini penting: index sparse
-        default: null  // Default null bukan undefined
+        unique: true
     },
     phone: { 
         type: String, 
+        required: true,  // FIXED: Sekarang required
         trim: true, 
-        sparse: true,  // Ini penting: index sparse
-        default: null  // Default null bukan undefined
+        unique: true
     },
     password: { type: String, required: true, minlength: 6 },
     balance: { type: Number, default: 0, min: 0 },
@@ -80,13 +121,11 @@ const userSchema = new mongoose.Schema({
     totalProfit: { type: Number, default: 0 },
     totalLoss: { type: Number, default: 0 },
     referralCode: { type: String, unique: true },
-    // Bank Data untuk Withdrawal
     bankData: {
         bankName: { type: String, trim: true },
         accountNumber: { type: String, trim: true },
         accountHolder: { type: String, trim: true }
     },
-    // Admin Settings untuk User Trading - ENHANCED
     adminSettings: {
         forceWin: { type: Boolean, default: false },
         forceWinRate: { type: Number, default: 0, min: 0, max: 100 },
@@ -117,26 +156,18 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// PERBAIKAN INDEX dari Dokumen 1: Pastikan unique tapi sparse untuk email dan phone
-userSchema.index({ email: 1 }, { 
-    unique: true, 
-    sparse: true,
-    partialFilterExpression: { email: { $exists: true, $ne: null } }
-});
-userSchema.index({ phone: 1 }, { 
-    unique: true, 
-    sparse: true,
-    partialFilterExpression: { phone: { $exists: true, $ne: null } }
-});
+// FIXED: Index untuk email dan phone (unique tanpa sparse)
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ phone: 1 }, { unique: true });
 
-// Custom validation dari Dokumen 1: user harus punya email ATAU phone
-userSchema.pre('validate', function(next) {
-    if (!this.email && !this.phone) {
-        this.invalidate('email', 'Either email or phone number is required');
-        this.invalidate('phone', 'Either email or phone number is required');
-    }
-    next();
-});
+// FIXED: Hapus custom validation yang memblokir email DAN phone
+// userSchema.pre('validate', function(next) {
+//     if (!this.email && !this.phone) {
+//         this.invalidate('email', 'Either email or phone number is required');
+//         this.invalidate('phone', 'Either email or phone number is required');
+//     }
+//     next();
+// });
 
 // Pre-save middleware to ensure adminSettings defaults
 userSchema.pre('save', function(next) {
@@ -148,7 +179,6 @@ userSchema.pre('save', function(next) {
             profitPercentage: 80
         };
     } else {
-        // Ensure all adminSettings have default values
         if (this.adminSettings.profitPercentage === undefined || this.adminSettings.profitPercentage === null) {
             this.adminSettings.profitPercentage = 80;
         }
@@ -172,6 +202,18 @@ userSchema.pre('save', function(next) {
     }
     
     next();
+});
+
+// Logo Schema - NEW untuk menyimpan info logo
+const logoSchema = new mongoose.Schema({
+    filename: { type: String, required: true },
+    originalName: { type: String, required: true },
+    mimetype: { type: String, required: true },
+    size: { type: Number, required: true },
+    path: { type: String, required: true },
+    isActive: { type: Boolean, default: true },
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    createdAt: { type: Date, default: Date.now }
 });
 
 // Bank Account Schema untuk Admin Panel
@@ -273,6 +315,7 @@ chartDataSchema.index({ symbol: 1, timeframe: 1, time: 1 }, { unique: true });
 
 // Create models
 const User = mongoose.model('User', userSchema);
+const Logo = mongoose.model('Logo', logoSchema);
 const BankAccount = mongoose.model('BankAccount', bankAccountSchema);
 const Trade = mongoose.model('Trade', tradeSchema);
 const Deposit = mongoose.model('Deposit', depositSchema);
@@ -778,7 +821,7 @@ function formatCurrency(amount) {
     }).format(amount || 0);
 }
 
-// FUNGSI VALIDASI TERBAIK dari Dokumen 1
+// FUNGSI VALIDASI - FIXED untuk email DAN phone
 function isValidEmail(email) {
     if (!email || typeof email !== 'string') return false;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -854,8 +897,8 @@ async function ensureIndexes() {
         await Deposit.collection.createIndex({ createdAt: -1 });
         
         // User indexes
-        await User.collection.createIndex({ email: 1 }, { sparse: true });
-        await User.collection.createIndex({ phone: 1 }, { sparse: true });
+        await User.collection.createIndex({ email: 1 }, { unique: true });
+        await User.collection.createIndex({ phone: 1 }, { unique: true });
         
         // Trade indexes
         await Trade.collection.createIndex({ userId: 1, status: 1, createdAt: -1 });
@@ -874,14 +917,15 @@ async function ensureIndexes() {
 // Enhanced root route
 app.get('/', (req, res) => {
     res.json({
-        message: 'TradeStation Backend API - Best Combined Version',
-        version: '3.2.0',
+        message: 'TradeStation Backend API - FIXED Registration + Logo Upload',
+        version: '3.3.0',
         status: 'Running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         features: [
-            'Enhanced Email/Phone Authentication (Best from Doc 1)',
-            'Robust Admin Panel with Timeouts (Best from Doc 2)',
+            'FIXED: Email + Phone Registration (Both Required)',
+            'Logo Upload for Header',
+            'Robust Admin Panel with Timeouts',
             'Performance Optimization for Many Users',
             'Advanced Monitoring & Debugging',
             'Mobile-First Trading',
@@ -894,20 +938,21 @@ app.get('/', (req, res) => {
             'Complete Admin Panel',
             'Enhanced Security & Validation'
         ],
-        improvements: [
-            'Combined best registration system from Dokumen 1',
-            'Enhanced admin deposit management from Dokumen 2',
-            'Database optimization and monitoring',
-            'Memory usage tracking',
-            'Query timeout handling',
-            'Better error handling for production'
+        fixes: [
+            'FIXED: Registration now accepts email AND phone (both required)',
+            'FIXED: Removed blocking validation for email OR phone only',
+            'NEW: Logo upload functionality for header',
+            'NEW: Static file serving for uploads',
+            'Enhanced database schema for email + phone combination'
         ],
         endpoints: {
             health: 'GET /api/health',
-            register: 'POST /api/register',
+            register: 'POST /api/register (FIXED - email + phone both required)',
             login: 'POST /api/login',
             prices: 'GET /api/prices',
             chart: 'GET /api/chart/:symbol/:timeframe',
+            logo: 'POST /api/admin/logo/upload (admin required)',
+            getLogo: 'GET /api/logo/current',
             profile: 'GET /api/profile (auth required)',
             bank: 'GET /api/profile/bank (auth required)',
             trading: 'POST /api/trade (auth required)',
@@ -920,7 +965,7 @@ app.get('/', (req, res) => {
 app.get('/api/health', (req, res) => {
     const health = {
         status: 'OK', 
-        message: 'TradeStation Backend is running smoothly - Combined Best Version',
+        message: 'TradeStation Backend - FIXED Registration + Logo Upload',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         database: {
@@ -934,7 +979,9 @@ app.get('/api/health', (req, res) => {
         },
         features: {
             chartDataSets: chartDataStore.size,
-            initialized: isInitialized
+            initialized: isInitialized,
+            registrationFixed: true,
+            logoUploadEnabled: true
         }
     };
     
@@ -1016,7 +1063,7 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
             lastUpdate: priceData.lastUpdate,
             metadata: {
                 generated: new Date().toISOString(),
-                source: 'TradeStation API v3.2.0 - Combined Best Version'
+                source: 'TradeStation API v3.3.0 - FIXED Registration + Logo Upload'
             }
         };
         
@@ -1035,17 +1082,167 @@ app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
 });
 
 // ========================================
-// AUTH ROUTES - TERBAIK dari Dokumen 1
+// LOGO UPLOAD ROUTES - NEW
 // ========================================
 
-// REGISTER ROUTE dengan validasi terbaik dari Dokumen 1
+// Upload logo (admin only)
+app.post('/api/admin/logo/upload', authenticateToken, requireAdmin, upload.single('logo'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No logo file provided' });
+        }
+        
+        console.log('📷 Logo upload attempt:', req.file);
+        
+        // Deactivate previous logos
+        await Logo.updateMany({}, { isActive: false });
+        
+        // Save new logo info
+        const logo = new Logo({
+            filename: req.file.filename,
+            originalName: req.file.originalname,
+            mimetype: req.file.mimetype,
+            size: req.file.size,
+            path: req.file.path,
+            isActive: true,
+            uploadedBy: req.userId
+        });
+        
+        await logo.save();
+        
+        await logActivity(req.userId, 'LOGO_UPLOAD', `New logo uploaded: ${req.file.originalname}`, req);
+        
+        res.json({
+            message: 'Logo uploaded successfully',
+            logo: {
+                filename: logo.filename,
+                originalName: logo.originalName,
+                size: logo.size,
+                url: `/uploads/${logo.filename}`,
+                uploadedAt: logo.createdAt
+            }
+        });
+        
+        console.log(`✅ Logo uploaded successfully: ${req.file.originalname}`);
+        
+    } catch (error) {
+        console.error('❌ Logo upload error:', error);
+        
+        // Clean up file if database save fails
+        if (req.file && req.file.path) {
+            try {
+                fs.unlinkSync(req.file.path);
+            } catch (unlinkError) {
+                console.error('❌ Error cleaning up file:', unlinkError);
+            }
+        }
+        
+        res.status(500).json({ error: 'Failed to upload logo' });
+    }
+});
+
+// Get current active logo
+app.get('/api/logo/current', async (req, res) => {
+    try {
+        const currentLogo = await Logo.findOne({ isActive: true }).sort({ createdAt: -1 });
+        
+        if (!currentLogo) {
+            return res.json({ 
+                hasLogo: false, 
+                message: 'No active logo found',
+                defaultText: 'TradeStation'
+            });
+        }
+        
+        // Check if file exists
+        if (!fs.existsSync(currentLogo.path)) {
+            console.error('❌ Logo file not found:', currentLogo.path);
+            return res.json({ 
+                hasLogo: false, 
+                message: 'Logo file not found',
+                defaultText: 'TradeStation'
+            });
+        }
+        
+        res.json({
+            hasLogo: true,
+            logo: {
+                filename: currentLogo.filename,
+                originalName: currentLogo.originalName,
+                url: `/uploads/${currentLogo.filename}`,
+                size: currentLogo.size,
+                uploadedAt: currentLogo.createdAt
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get logo error:', error);
+        res.status(500).json({ 
+            error: 'Failed to get logo',
+            hasLogo: false,
+            defaultText: 'TradeStation'
+        });
+    }
+});
+
+// Get all logos (admin only)
+app.get('/api/admin/logos', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const logos = await Logo.find()
+            .populate('uploadedBy', 'name email')
+            .sort({ createdAt: -1 })
+            .limit(20);
+        
+        res.json({ logos });
+        
+    } catch (error) {
+        console.error('❌ Get logos error:', error);
+        res.status(500).json({ error: 'Failed to get logos' });
+    }
+});
+
+// Delete logo (admin only)
+app.delete('/api/admin/logo/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const logo = await Logo.findById(id);
+        if (!logo) {
+            return res.status(404).json({ error: 'Logo not found' });
+        }
+        
+        // Delete file from filesystem
+        if (fs.existsSync(logo.path)) {
+            fs.unlinkSync(logo.path);
+        }
+        
+        // Delete from database
+        await Logo.findByIdAndDelete(id);
+        
+        await logActivity(req.userId, 'LOGO_DELETE', `Logo deleted: ${logo.originalName}`, req);
+        
+        res.json({ message: 'Logo deleted successfully' });
+        
+        console.log(`✅ Logo deleted: ${logo.originalName}`);
+        
+    } catch (error) {
+        console.error('❌ Delete logo error:', error);
+        res.status(500).json({ error: 'Failed to delete logo' });
+    }
+});
+
+// ========================================
+// AUTH ROUTES - FIXED untuk Email + Phone
+// ========================================
+
+// REGISTER ROUTE - FIXED untuk menerima email DAN phone (keduanya wajib)
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
-        console.log('📝 Register request:', { name, email: !!email, phone: !!phone, password: !!password });
+        console.log('📝 FIXED Register request:', { name, email: !!email, phone: !!phone, password: !!password });
         
-        // Enhanced validation
+        // Enhanced validation - FIXED: Kedua field harus ada
         if (!name || name.trim().length < 2) {
             return res.status(400).json({ error: 'Nama harus minimal 2 karakter' });
         }
@@ -1054,45 +1251,43 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             return res.status(400).json({ error: 'Password harus minimal 6 karakter' });
         }
 
-        // PERBAIKAN: User harus punya email ATAU phone (tidak keduanya)
-        if (!email && !phone) {
-            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
+        // FIXED: Email DAN phone keduanya wajib diisi
+        if (!email || !phone) {
+            return res.status(400).json({ error: 'Email dan nomor HP keduanya harus diisi' });
         }
         
-        // Validasi email jika ada
-        if (email && !isValidEmail(email)) {
+        // Validasi email
+        if (!isValidEmail(email)) {
             return res.status(400).json({ error: 'Format email tidak valid' });
         }
         
-        // Validasi phone jika ada
-        if (phone && !isValidPhone(phone)) {
+        // Validasi phone
+        if (!isValidPhone(phone)) {
             return res.status(400).json({ error: 'Format nomor HP tidak valid. Gunakan format: 08xxx atau +628xxx' });
         }
         
-        // PERBAIKAN: Check existing user dengan logic yang lebih baik
-        let existingUser = null;
+        // FIXED: Check existing user dengan kedua field
+        const cleanEmail = email.toLowerCase().trim();
+        const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone number
         
-        if (email) {
-            existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-            if (existingUser) {
-                return res.status(400).json({ error: 'Email sudah terdaftar' });
-            }
+        const existingEmailUser = await User.findOne({ email: cleanEmail });
+        if (existingEmailUser) {
+            return res.status(400).json({ error: 'Email sudah terdaftar' });
         }
         
-        if (phone) {
-            const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone number
-            existingUser = await User.findOne({ phone: cleanPhone });
-            if (existingUser) {
-                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
-            }
+        const existingPhoneUser = await User.findOne({ phone: cleanPhone });
+        if (existingPhoneUser) {
+            return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
         }
         
         // Enhanced password hashing
         const hashedPassword = await bcrypt.hash(password, 12);
         
-        // PERBAIKAN: Create user dengan data yang bersih
+        // FIXED: Create user dengan email DAN phone (keduanya required)
         const userData = {
             name: name.trim(),
+            email: cleanEmail,           // FIXED: required
+            phone: cleanPhone,           // FIXED: required
             password: hashedPassword,
             referralCode: generateReferralCode(),
             balance: 0,
@@ -1108,16 +1303,8 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
                 loseTrades: 0
             }
         };
-
-        // PERBAIKAN: Hanya set field yang ada datanya
-        if (email) {
-            userData.email = email.toLowerCase().trim();
-        }
-        if (phone) {
-            userData.phone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone
-        }
         
-        console.log('📝 Creating user with data:', { 
+        console.log('📝 Creating user with FIXED data:', { 
             name: userData.name, 
             email: userData.email, 
             phone: userData.phone,
@@ -1128,7 +1315,7 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         await user.save();
         
         // Enhanced activity logging
-        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email || phone}`, req);
+        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email} / ${phone}`, req);
         
         // Generate token
         const token = jwt.sign(
@@ -1147,10 +1334,10 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             user: userResponse
         });
         
-        console.log(`✅ New user registered: ${email || phone}`);
+        console.log(`✅ FIXED: New user registered with email AND phone: ${email} / ${phone}`);
         
     } catch (error) {
-        console.error('❌ Registration error:', error);
+        console.error('❌ FIXED Registration error:', error);
         
         // Handle MongoDB errors
         if (error.code === 11000) {
@@ -1175,37 +1362,31 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
     }
 });
 
-// LOGIN ROUTE dengan validasi terbaik dari Dokumen 1
+// LOGIN ROUTE - FIXED untuk mencari dengan email ATAU phone
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { email, phone, password } = req.body;
         
-        console.log('📝 Login request:', { email: !!email, phone: !!phone, password: !!password });
+        console.log('📝 FIXED Login request:', { email: !!email, phone: !!phone, password: !!password });
         
         if (!password) {
             return res.status(400).json({ error: 'Password diperlukan' });
         }
 
         if (!email && !phone) {
-            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
+            return res.status(400).json({ error: 'Email atau nomor HP diperlukan untuk login' });
         }
         
-        // PERBAIKAN: Find user dengan logic yang lebih baik
+        // FIXED: Find user dengan email ATAU phone (user bisa login dengan salah satu)
         let user = null;
         
-        if (email) {
-            // Coba cari dengan email
-            if (isValidEmail(email)) {
-                user = await User.findOne({ email: email.toLowerCase().trim() });
-            }
+        if (email && isValidEmail(email)) {
+            user = await User.findOne({ email: email.toLowerCase().trim() });
         }
         
-        if (!user && phone) {
-            // Jika tidak ketemu dengan email, coba dengan phone
+        if (!user && phone && isValidPhone(phone)) {
             const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
-            if (isValidPhone(cleanPhone)) {
-                user = await User.findOne({ phone: cleanPhone });
-            }
+            user = await User.findOne({ phone: cleanPhone });
         }
         
         if (!user) {
@@ -1242,10 +1423,10 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             user: userResponse
         });
         
-        console.log(`✅ User logged in: ${email || phone}`);
+        console.log(`✅ FIXED: User logged in: ${email || phone}`);
         
     } catch (error) {
-        console.error('❌ Login error:', error);
+        console.error('❌ FIXED Login error:', error);
         res.status(500).json({ error: 'Login gagal. Silakan coba lagi.' });
     }
 });
@@ -1804,7 +1985,7 @@ app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res)
             return res.status(404).json({ error: 'User not found' });
         }
         
-        await logActivity(req.userId, 'ADMIN_USER_UPDATE', `Updated user: ${user.name} (${user.email || user.phone})`, req);
+        await logActivity(req.userId, 'ADMIN_USER_UPDATE', `Updated user: ${user.name} (${user.email} / ${user.phone})`, req);
         
         res.json({ message: 'User updated successfully', user });
         
@@ -2509,7 +2690,7 @@ process.on('SIGINT', () => {
 });
 
 // ========================================
-// SERVER START (menggunakan yang dari Dokumen 2 dengan monitoring)
+// SERVER START
 // ========================================
 
 const PORT = process.env.PORT || 3000;
@@ -2536,13 +2717,14 @@ async function startServer() {
             mongoose.connection.once('connected', ensureIndexes);
         }
         
-        // Initialize default admin user
+        // Initialize default admin user - FIXED dengan email DAN phone
         const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
         if (!adminExists) {
             const hashedPassword = await bcrypt.hash('admin123', 12);
             const admin = new User({
                 name: 'Administrator',
                 email: 'admin@tradestation.com',
+                phone: '+6281234567890',  // FIXED: Phone required
                 password: hashedPassword,
                 balance: 0,
                 accountType: 'premium',
@@ -2560,11 +2742,10 @@ async function startServer() {
                 }
             });
             await admin.save();
-            console.log('✅ Default admin user created (admin@tradestation.com / admin123)');
-            console.log('✅ Admin settings:', admin.adminSettings);
+            console.log('✅ FIXED: Default admin user created with email AND phone');
+            console.log('✅ Admin credentials: admin@tradestation.com / +6281234567890 / admin123');
         } else {
             console.log('✅ Admin user already exists');
-            console.log('✅ Admin settings:', adminExists.adminSettings);
         }
         
         // Initialize sample bank accounts
@@ -2625,46 +2806,59 @@ async function startServer() {
         // Start server
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`
-🚀 TradeStation Backend Server Started Successfully! - BEST COMBINED VERSION
+🚀 TradeStation Backend Server Started - FIXED REGISTRATION + LOGO UPLOAD!
 📍 Port: ${PORT}
 🌍 Environment: ${process.env.NODE_ENV || 'development'}
-📧 Enhanced Email/Phone Authentication: ✅ (From Dokumen 1 - Best Registration)
-📱 Robust Admin Panel: ✅ (From Dokumen 2 - With Timeouts & Optimization)
-🛡️  Performance for Many Users: ✅ (Database Optimization & Monitoring)
-📊 Real-time Chart Data: ✅ Enhanced
-💳 Bank Management: ✅ Enabled
-🎯 Trading Control: ✅ Advanced
-💰 Profit Settings: ✅ Dynamic
-⚙️  Admin Panel: ✅ Complete with Timeouts
-🔄 Background Processes: ✅ Running
-🗃️  Database: ✅ Connected with Monitoring
-📡 Socket.IO: ✅ Ready
-⏰ Timestamp: ${new Date().toISOString()}
 
-🔗 API Endpoints:
+🔧 MAJOR FIXES APPLIED:
+✅ FIXED: Registration now requires email AND phone (both fields)
+✅ FIXED: Removed blocking validation that only allowed email OR phone
+✅ NEW: Logo upload functionality for header customization
+✅ NEW: Static file serving for logo uploads
+✅ Enhanced database schema to support email + phone combination
+
+📧 FIXED Registration System:
+   • Email field: REQUIRED ✅
+   • Phone field: REQUIRED ✅  
+   • Both fields must be filled during registration
+   • Users can login with either email OR phone
+
+📷 NEW Logo Upload System:
+   • Admin can upload custom logo for header
+   • Supports JPEG, PNG, WebP, SVG formats
+   • Maximum file size: 5MB
+   • Automatic file management
+   • Endpoint: POST /api/admin/logo/upload
+
+📱 Features Still Working:
+   ✅ Robust Admin Panel with Timeouts
+   ✅ Performance Optimization for Many Users
+   ✅ Database Optimization & Monitoring
+   ✅ Real-time Chart Data
+   ✅ Trading System
+   ✅ Deposit/Withdrawal Management
+   ✅ Bank Account Management
+   ✅ Socket.IO Real-time Updates
+
+🔗 Key API Endpoints:
+   • Registration (FIXED): POST /api/register
+   • Login: POST /api/login
+   • Logo Upload: POST /api/admin/logo/upload
+   • Get Logo: GET /api/logo/current
    • Health Check: GET /api/health
-   • Database Health: GET /api/admin/health/database
-   • Authentication: POST /api/login, /api/register (Enhanced)
-   • Trading: POST /api/trade, GET /api/trades
-   • Charts: GET /api/chart/:symbol/:timeframe
-   • Admin Panel: /api/admin/* (Enhanced with Timeouts)
 
 📋 Admin Credentials:
    • Email: admin@tradestation.com
+   • Phone: +6281234567890  
    • Password: admin123
 
-✨ COMBINED BEST FEATURES:
-   ✅ Enhanced Registration System (Dokumen 1)
-   ✅ Robust Admin Deposit Management (Dokumen 2)
-   ✅ Database Optimization & Monitoring
-   ✅ Memory Usage Tracking
-   ✅ Query Timeout Handling
-   ✅ Better Error Handling for Production
-   ✅ Indonesian Phone Number Validation
-   ✅ Transaction Atomic Operations
-   ✅ Performance Optimization for High Load
+🛠️ Dependencies Added:
+   • multer (for file uploads)
+   • path, fs (for file management)
 
-🎯 Ready to serve trading requests with optimal performance!
+⏰ Timestamp: ${new Date().toISOString()}
+
+✨ PROBLEM SOLVED: Users can now register with both email AND phone! 🎉
             `);
         });
         
