@@ -13,85 +13,50 @@ const app = express();
 const server = http.createServer(app);
 
 // ========================================
-// 🔧 ENHANCED CORS CONFIGURATION - TERBARU
+// 🔧 ENHANCED CORS CONFIGURATION - OPTIMIZED
 // ========================================
 
 const allowedOrigins = [
     // Production domains
     'https://ts-traderstation.com',
-    'https://www.ts-traderstation.com',
+    'https://www.ts-traderstation.com', 
     'https://tstradestation-frontend.vercel.app',
     'https://tstradestation-admin.vercel.app',
     
     // Development domains
     'http://localhost:3000',
-    'http://localhost:3001', 
+    'http://localhost:3001',
     'http://localhost:5173',
     'http://localhost:8080',
     'http://127.0.0.1:5500',
     'http://localhost:5500',
     
-    // File protocol untuk development
+    // File protocol
     'file://',
-    'null' // untuk file:// protocol
+    'null'
 ];
 
-// Dynamic CORS configuration - ENHANCED
+// Optimized CORS function
+const isDevelopmentOrigin = (origin) => {
+    if (!origin) return true; // Mobile apps, Postman
+    return origin.startsWith('http://localhost:') || 
+           origin.startsWith('http://127.0.0.1:') ||
+           origin === 'null' ||
+           allowedOrigins.includes(origin);
+};
+
 app.use(cors({
-    origin: function (origin, callback) {
-        // Allow requests with no origin (mobile apps, Postman, etc.)
-        if (!origin) return callback(null, true);
-        
-        // Check if origin is in allowed list or matches pattern
-        const isAllowed = allowedOrigins.some(allowedOrigin => {
-            if (allowedOrigin === origin) return true;
-            
-            // Allow any localhost with different ports
-            if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
-                return true;
-            }
-            
-            // Allow file protocol
-            if (origin === 'null' && allowedOrigin === 'file://') {
-                return true;
-            }
-            
-            return false;
-        });
-        
-        if (isAllowed) {
-            callback(null, true);
-        } else {
-            console.log('🚫 CORS blocked origin:', origin);
-            callback(new Error('CORS: Origin not allowed'), false);
-        }
-    },
+    origin: isDevelopmentOrigin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     optionsSuccessStatus: 200
 }));
 
-// Socket.IO CORS configuration - ENHANCED
+// Socket.IO CORS
 const io = socketIo(server, {
     cors: {
-        origin: function (origin, callback) {
-            // Same logic as HTTP CORS
-            if (!origin) return callback(null, true);
-            
-            const isAllowed = allowedOrigins.some(allowedOrigin => {
-                if (allowedOrigin === origin) return true;
-                if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
-                    return true;
-                }
-                if (origin === 'null' && allowedOrigin === 'file://') {
-                    return true;
-                }
-                return false;
-            });
-            
-            callback(null, isAllowed);
-        },
+        origin: isDevelopmentOrigin,
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -100,7 +65,7 @@ const io = socketIo(server, {
 });
 
 // ========================================
-// MIDDLEWARE SETUP
+// 🛡️ ENHANCED MIDDLEWARE SETUP
 // ========================================
 
 app.use(helmet({
@@ -111,60 +76,108 @@ app.use(helmet({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting - ENHANCED
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
-    message: { error: 'Too many requests from this IP, please try again later.' }
-});
-app.use('/api/', limiter);
-
-// Auth rate limiting - ENHANCED
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5,
-    message: { error: 'Too many authentication attempts, please try again later.' }
+// Enhanced rate limiting
+const createLimiter = (windowMs, max, message) => rateLimit({
+    windowMs,
+    max,
+    message: { error: message },
+    standardHeaders: true,
+    legacyHeaders: false
 });
 
+const generalLimiter = createLimiter(15 * 60 * 1000, 100, 'Too many requests, please try again later');
+const authLimiter = createLimiter(15 * 60 * 1000, 5, 'Too many authentication attempts');
+
+app.use('/api/', generalLimiter);
+
 // ========================================
-// DATABASE MODELS - ENHANCED
+// 📊 ENHANCED DATABASE MODELS
 // ========================================
 
-// User Schema - ENHANCED dengan validasi terbaik
+// Enhanced User Schema with better validation
 const userSchema = new mongoose.Schema({
-    name: { type: String, required: true, trim: true, minlength: 2 },
+    name: { 
+        type: String, 
+        required: [true, 'Name is required'], 
+        trim: true, 
+        minlength: [2, 'Name must be at least 2 characters'],
+        maxlength: [50, 'Name cannot exceed 50 characters']
+    },
     email: { 
         type: String, 
         trim: true, 
         lowercase: true, 
-        sparse: true,  // Index sparse untuk performa
-        default: null
+        sparse: true,
+        validate: {
+            validator: function(email) {
+                return !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+            },
+            message: 'Invalid email format'
+        }
     },
     phone: { 
         type: String, 
         trim: true, 
-        sparse: true,  // Index sparse untuk performa
-        default: null
+        sparse: true,
+        validate: {
+            validator: function(phone) {
+                return !phone || /^(\+?62|0)[0-9]{9,13}$/.test(phone.replace(/[\s\-\(\)]/g, ''));
+            },
+            message: 'Invalid phone number format'
+        }
     },
-    password: { type: String, required: true, minlength: 6 },
-    balance: { type: Number, default: 0, min: 0 },
-    accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
-    isActive: { type: Boolean, default: true },
-    totalProfit: { type: Number, default: 0 },
-    totalLoss: { type: Number, default: 0 },
-    referralCode: { type: String, unique: true },
+    password: { 
+        type: String, 
+        required: [true, 'Password is required'], 
+        minlength: [6, 'Password must be at least 6 characters'] 
+    },
+    balance: { 
+        type: Number, 
+        default: 0, 
+        min: [0, 'Balance cannot be negative'] 
+    },
+    accountType: { 
+        type: String, 
+        enum: ['standard', 'premium'], 
+        default: 'standard' 
+    },
+    isActive: { 
+        type: Boolean, 
+        default: true 
+    },
+    totalProfit: { 
+        type: Number, 
+        default: 0 
+    },
+    totalLoss: { 
+        type: Number, 
+        default: 0 
+    },
+    referralCode: { 
+        type: String, 
+        unique: true 
+    },
     
-    // Bank Data untuk Withdrawal - ENHANCED
+    // Bank Data
     bankData: {
         bankName: { type: String, trim: true },
         accountNumber: { type: String, trim: true },
         accountHolder: { type: String, trim: true }
     },
     
-    // Admin Settings untuk User Trading - ENHANCED
+    // Enhanced Admin Settings
     adminSettings: {
         forceWin: { type: Boolean, default: false },
-        forceWinRate: { type: Number, default: 0, min: 0, max: 100 },
+        forceWinRate: { 
+            type: Number, 
+            default: 0, 
+            min: 0, 
+            max: 100,
+            validate: {
+                validator: Number.isInteger,
+                message: 'Win rate must be an integer'
+            }
+        },
         profitCollapse: { 
             type: String, 
             enum: ['profit', 'collapse', 'normal'], 
@@ -194,29 +207,17 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// Enhanced indexes untuk performa optimal
-userSchema.index({ email: 1 }, { 
-    unique: true, 
-    sparse: true,
-    partialFilterExpression: { email: { $exists: true, $ne: null } }
-});
-userSchema.index({ phone: 1 }, { 
-    unique: true, 
-    sparse: true,
-    partialFilterExpression: { phone: { $exists: true, $ne: null } }
-});
-
-// Custom validation: user harus punya email ATAU phone
+// Enhanced validation middleware
 userSchema.pre('validate', function(next) {
     if (!this.email && !this.phone) {
-        this.invalidate('email', 'Either email or phone number is required');
-        this.invalidate('phone', 'Either email or phone number is required');
+        return next(new Error('Either email or phone number is required'));
     }
     next();
 });
 
-// Pre-save middleware untuk memastikan default values
+// Enhanced pre-save middleware
 userSchema.pre('save', function(next) {
+    // Ensure adminSettings defaults
     if (!this.adminSettings) {
         this.adminSettings = {
             forceWin: false,
@@ -224,22 +225,9 @@ userSchema.pre('save', function(next) {
             profitCollapse: 'normal',
             profitPercentage: 80
         };
-    } else {
-        // Pastikan semua adminSettings punya default values
-        if (this.adminSettings.profitPercentage === undefined || this.adminSettings.profitPercentage === null) {
-            this.adminSettings.profitPercentage = 80;
-        }
-        if (this.adminSettings.profitCollapse === undefined || this.adminSettings.profitCollapse === null) {
-            this.adminSettings.profitCollapse = 'normal';
-        }
-        if (this.adminSettings.forceWin === undefined || this.adminSettings.forceWin === null) {
-            this.adminSettings.forceWin = false;
-        }
-        if (this.adminSettings.forceWinRate === undefined || this.adminSettings.forceWinRate === null) {
-            this.adminSettings.forceWinRate = 0;
-        }
     }
     
+    // Ensure stats defaults
     if (!this.stats) {
         this.stats = {
             totalTrades: 0,
@@ -251,102 +239,93 @@ userSchema.pre('save', function(next) {
     next();
 });
 
-// Bank Account Schema - ENHANCED
+// Enhanced indexes
+userSchema.index({ email: 1 }, { 
+    unique: true, 
+    sparse: true,
+    partialFilterExpression: { email: { $exists: true, $ne: null } }
+});
+userSchema.index({ phone: 1 }, { 
+    unique: true, 
+    sparse: true,
+    partialFilterExpression: { phone: { $exists: true, $ne: null } }
+});
+
+// Other schemas (optimized)
 const bankAccountSchema = new mongoose.Schema({
-    bankName: { type: String, required: true },
-    accountNumber: { type: String, required: true },
-    accountHolder: { type: String, required: true },
+    bankName: { type: String, required: true, trim: true },
+    accountNumber: { type: String, required: true, trim: true },
+    accountHolder: { type: String, required: true, trim: true },
     isActive: { type: Boolean, default: true },
-    note: { type: String },
+    note: { type: String, trim: true },
     createdAt: { type: Date, default: Date.now }
 });
 
-// Trade Schema - ENHANCED
 const tradeSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    symbol: { type: String, required: true },
+    symbol: { type: String, required: true, uppercase: true },
     direction: { type: String, enum: ['buy', 'sell'], required: true },
-    amount: { type: Number, required: true, min: 500000 },
+    amount: { type: Number, required: true, min: 500000, max: 100000000 },
     duration: { type: Number, required: true, min: 30, max: 300 },
-    entryPrice: { type: Number, required: true },
-    exitPrice: { type: Number },
+    entryPrice: { type: Number, required: true, min: 0 },
+    exitPrice: { type: Number, min: 0 },
     status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
     result: { type: String, enum: ['win', 'lose'] },
-    payout: { type: Number },
+    payout: { type: Number, min: 0 },
     priceChangePercent: { type: Number },
     forceResult: { type: String, enum: ['win', 'lose'] },
     adminForced: { type: Boolean, default: false },
-    profitPercentage: { type: Number, default: 80 },
+    profitPercentage: { type: Number, default: 80, min: 20, max: 100 },
     createdAt: { type: Date, default: Date.now },
     completedAt: { type: Date }
 });
 
-// Deposit Schema - ENHANCED
 const depositSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true, min: 500000 },
     method: { type: String, default: 'Bank Transfer' },
-    bankFrom: { type: String },
+    bankFrom: { type: String, trim: true },
     receipt: { type: String }, // base64 file data
-    fileName: { type: String },
-    fileType: { type: String },
-    fileSize: { type: Number },
+    fileName: { type: String, trim: true },
+    fileType: { type: String, trim: true },
+    fileSize: { type: Number, min: 0 },
     status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
-    adminNotes: { type: String },
-    transferTime: { type: Date },
+    adminNotes: { type: String, trim: true },
     createdAt: { type: Date, default: Date.now },
     processedAt: { type: Date }
 });
 
-// Withdrawal Schema - ENHANCED
 const withdrawalSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true, min: 100000 },
-    fee: { type: Number, required: true },
-    finalAmount: { type: Number, required: true },
+    fee: { type: Number, required: true, min: 0 },
+    finalAmount: { type: Number, required: true, min: 0 },
     bankAccount: {
-        bankName: { type: String, required: true },
-        accountNumber: { type: String, required: true },
-        accountHolder: { type: String, required: true }
+        bankName: { type: String, required: true, trim: true },
+        accountNumber: { type: String, required: true, trim: true },
+        accountHolder: { type: String, required: true, trim: true }
     },
     status: { type: String, enum: ['pending', 'approved', 'rejected', 'processed'], default: 'pending' },
-    adminNotes: { type: String },
+    adminNotes: { type: String, trim: true },
     createdAt: { type: Date, default: Date.now },
     processedAt: { type: Date }
 });
 
-// Price Schema - ENHANCED
 const priceSchema = new mongoose.Schema({
-    symbol: { type: String, required: true, unique: true },
+    symbol: { type: String, required: true, unique: true, uppercase: true },
     price: { type: Number, required: true, min: 0 },
     change: { type: Number, default: 0 },
     lastUpdate: { type: Date, default: Date.now }
 });
 
-// Activity Schema - ENHANCED
 const activitySchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    action: { type: String, required: true },
-    details: { type: String },
-    ip: { type: String },
-    userAgent: { type: String },
+    action: { type: String, required: true, trim: true },
+    details: { type: String, trim: true },
+    ip: { type: String, trim: true },
+    userAgent: { type: String, trim: true },
     createdAt: { type: Date, default: Date.now }
 });
-
-// Chart Data Schema - ENHANCED
-const chartDataSchema = new mongoose.Schema({
-    symbol: { type: String, required: true },
-    timeframe: { type: String, required: true },
-    time: { type: Number, required: true },
-    open: { type: Number, required: true },
-    high: { type: Number, required: true },
-    low: { type: Number, required: true },
-    close: { type: Number, required: true },
-    volume: { type: Number, default: 0 },
-    createdAt: { type: Date, default: Date.now }
-});
-
-chartDataSchema.index({ symbol: 1, timeframe: 1, time: 1 }, { unique: true });
 
 // Create models
 const User = mongoose.model('User', userSchema);
@@ -356,27 +335,47 @@ const Deposit = mongoose.model('Deposit', depositSchema);
 const Withdrawal = mongoose.model('Withdrawal', withdrawalSchema);
 const Price = mongoose.model('Price', priceSchema);
 const Activity = mongoose.model('Activity', activitySchema);
-const ChartData = mongoose.model('ChartData', chartDataSchema);
 
 // ========================================
-// HELPER FUNCTIONS - ENHANCED
+// 🛠️ ENHANCED HELPER FUNCTIONS
 // ========================================
 
-// Chart Data Management
-let chartDataStore = new Map();
-let isInitialized = false;
+const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount || 0);
+};
 
-function generateReferralCode() {
+const generateReferralCode = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
+};
 
-// Enhanced activity logging dengan IP dan User Agent
-async function logActivity(userId, action, details = '', req = null) {
+const isValidEmail = (email) => {
+    if (!email || typeof email !== 'string') return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+};
+
+const isValidPhone = (phone) => {
+    if (!phone || typeof phone !== 'string') return false;
+    const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
+    return /^(\+?62|0)[0-9]{9,13}$/.test(cleanPhone);
+};
+
+const sanitizePhone = (phone) => {
+    if (!phone) return null;
+    return phone.replace(/[\s\-\(\)]/g, '');
+};
+
+// Enhanced activity logging
+const logActivity = async (userId, action, details = '', req = null) => {
     try {
         const activityData = {
             userId,
-            action,
-            details
+            action: action.trim(),
+            details: details.trim()
         };
         
         if (req) {
@@ -389,427 +388,64 @@ async function logActivity(userId, action, details = '', req = null) {
     } catch (error) {
         console.error('❌ Error logging activity:', error);
     }
-}
+};
 
-// Enhanced real-time notifications
-function sendUserNotification(userId, type, data) {
+// Enhanced notification system
+const sendUserNotification = (userId, type, data) => {
     try {
         if (!userId || !type) return;
         
         const userIdString = userId.toString();
-        
-        // Send to specific user
-        io.to(userIdString).emit(type, {
+        const notificationData = {
             ...data,
             timestamp: new Date().toISOString(),
             type: type
-        });
+        };
         
+        io.to(userIdString).emit(type, notificationData);
         console.log(`📡 Sent ${type} notification to user ${userIdString}`);
         
     } catch (error) {
         console.error('❌ Error sending notification:', error);
     }
-}
+};
 
-function getTimeframeMinutes(timeframe) {
-    const timeframes = {
-        '1m': 1,
-        '5m': 5,
-        '15m': 15,
-        '30m': 30,
-        '1h': 60,
-        '4h': 240,
-        '1d': 1440
-    };
-    return timeframes[timeframe] || 5;
-}
+// Chart data management (simplified)
+let chartDataStore = new Map();
+let isInitialized = false;
 
-function roundTimeToTimeframe(timestamp, timeframe) {
+const generateCandleData = (symbol, currentPrice, previousCandle = null) => {
     try {
-        const minutes = getTimeframeMinutes(timeframe);
-        const roundedMinutes = Math.floor(timestamp / (minutes * 60 * 1000)) * minutes * 60 * 1000;
-        return roundedMinutes;
-    } catch (error) {
-        console.error('❌ Error rounding time:', error);
-        return timestamp;
-    }
-}
-
-// Enhanced candle generation dengan validasi lebih baik
-function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle = null) {
-    try {
-        if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
-            console.error(`❌ Invalid price for ${symbol}:`, currentPrice);
-            return null;
-        }
-
         const now = Date.now();
-        const roundedTime = roundTimeToTimeframe(now, timeframe);
+        const volatility = Math.random() * 0.015 + 0.005;
         
-        // Jika ini candle baru
-        if (!previousCandle || previousCandle.time < roundedTime) {
-            const volatility = Math.random() * 0.015 + 0.005; // 0.5% to 2% volatility
-            
-            const open = previousCandle ? previousCandle.close : currentPrice;
-            const close = currentPrice;
-            
-            // Generate realistic high dan low dengan validasi proper
-            const maxPrice = Math.max(open, close);
-            const minPrice = Math.min(open, close);
-            
-            const high = maxPrice * (1 + Math.random() * volatility);
-            const low = minPrice * (1 - Math.random() * volatility);
-            
-            const volume = Math.floor(Math.random() * 900000) + 100000;
-            
-            const candle = {
-                time: Math.floor(roundedTime / 1000),
-                open: parseFloat(Math.max(0.001, open).toFixed(8)),
-                high: parseFloat(Math.max(0.001, high).toFixed(8)),
-                low: parseFloat(Math.max(0.001, low).toFixed(8)),
-                close: parseFloat(Math.max(0.001, close).toFixed(8)),
-                volume
-            };
-            
-            // Pastikan OHLC logic benar
-            candle.high = Math.max(candle.open, candle.high, candle.low, candle.close);
-            candle.low = Math.min(candle.open, candle.high, candle.low, candle.close);
-            
-            return candle;
-        } else {
-            // Update existing candle
-            const updatedCandle = {
-                ...previousCandle,
-                close: parseFloat(Math.max(0.001, currentPrice).toFixed(8)),
-                high: Math.max(previousCandle.high, currentPrice),
-                low: Math.min(previousCandle.low, currentPrice),
-                volume: previousCandle.volume + Math.floor(Math.random() * 50000)
-            };
-            
-            return updatedCandle;
-        }
+        const open = previousCandle ? previousCandle.close : currentPrice;
+        const close = currentPrice;
+        const maxPrice = Math.max(open, close);
+        const minPrice = Math.min(open, close);
+        
+        const high = maxPrice * (1 + Math.random() * volatility);
+        const low = minPrice * (1 - Math.random() * volatility);
+        const volume = Math.floor(Math.random() * 900000) + 100000;
+        
+        return {
+            time: Math.floor(now / 1000),
+            open: parseFloat(Math.max(0.001, open).toFixed(8)),
+            high: parseFloat(Math.max(0.001, high).toFixed(8)),
+            low: parseFloat(Math.max(0.001, low).toFixed(8)),
+            close: parseFloat(Math.max(0.001, close).toFixed(8)),
+            volume
+        };
     } catch (error) {
         console.error('❌ Error generating candle:', error);
         return null;
     }
-}
+};
 
-// Enhanced historical data generation
-async function generateHistoricalData(symbol, timeframe, count = 100) {
-    try {
-        console.log(`📊 Generating historical data for ${symbol}/${timeframe} (${count} candles)`);
-        
-        const currentPrice = await Price.findOne({ symbol });
-        if (!currentPrice || !currentPrice.price || currentPrice.price <= 0) {
-            console.error(`❌ Invalid price data for symbol: ${symbol}`);
-            return [];
-        }
-        
-        const timeframeMs = getTimeframeMinutes(timeframe) * 60 * 1000;
-        const now = Date.now();
-        const data = [];
-        
-        let price = currentPrice.price;
-        
-        // Generate historical candles dengan trend yang lebih realistis
-        for (let i = count; i >= 0; i--) {
-            const time = Math.floor((now - (i * timeframeMs)) / 1000);
-            
-            // Add realistic price movement dengan trend detection
-            const baseVolatility = 0.01;
-            const timeVolatility = 0.005;
-            const trendFactor = (Math.random() - 0.49) * (baseVolatility + timeVolatility);
-            
-            const newPrice = Math.max(0.001, price * (1 + trendFactor));
-            
-            const open = price;
-            const close = newPrice;
-            const spread = Math.abs(close - open);
-            const high = Math.max(open, close) + (spread * Math.random() * 0.5);
-            const low = Math.min(open, close) - (spread * Math.random() * 0.5);
-            const volume = Math.floor(Math.random() * 1000000) + 100000;
-            
-            const candleData = {
-                time,
-                open: parseFloat(Math.max(0.001, open).toFixed(8)),
-                high: parseFloat(Math.max(0.001, high).toFixed(8)),
-                low: parseFloat(Math.max(0.001, low).toFixed(8)),
-                close: parseFloat(Math.max(0.001, close).toFixed(8)),
-                volume
-            };
-            
-            // Pastikan OHLC validation
-            candleData.high = Math.max(candleData.open, candleData.high, candleData.low, candleData.close);
-            candleData.low = Math.min(candleData.open, candleData.high, candleData.low, candleData.close);
-            
-            data.push(candleData);
-            price = newPrice;
-        }
-        
-        // Sort by time
-        data.sort((a, b) => a.time - b.time);
-        
-        console.log(`✅ Generated ${data.length} historical candles for ${symbol}/${timeframe}`);
-        return data;
-        
-    } catch (error) {
-        console.error('❌ Error generating historical data:', error);
-        return [];
-    }
-}
+// ========================================
+// 🔐 ENHANCED MIDDLEWARE
+// ========================================
 
-// Enhanced chart data initialization
-async function initializeChartDataForSymbol(symbol, timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']) {
-    try {
-        console.log(`📊 Initializing chart data for ${symbol}`);
-        
-        for (const timeframe of timeframes) {
-            const key = `${symbol}-${timeframe}`;
-            
-            if (!chartDataStore.has(key)) {
-                const historicalData = await generateHistoricalData(symbol, timeframe, 100);
-                if (historicalData && historicalData.length > 0) {
-                    chartDataStore.set(key, historicalData);
-                    console.log(`✅ Initialized ${historicalData.length} candles for ${symbol}/${timeframe}`);
-                } else {
-                    console.error(`❌ Failed to generate data for ${symbol}/${timeframe}`);
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`❌ Error initializing chart data for ${symbol}:`, error);
-    }
-}
-
-// Enhanced price initialization
-async function initializePrices() {
-    try {
-        const defaultPrices = [
-            { symbol: 'BTC', price: 45000 + (Math.random() * 10000), change: (Math.random() - 0.5) * 5 },
-            { symbol: 'ETH', price: 3200 + (Math.random() * 500), change: (Math.random() - 0.5) * 5 },
-            { symbol: 'LTC', price: 180 + (Math.random() * 20), change: (Math.random() - 0.5) * 5 },
-            { symbol: 'XRP', price: 0.65 + (Math.random() * 0.1), change: (Math.random() - 0.5) * 5 },
-            { symbol: 'DOGE', price: 0.08 + (Math.random() * 0.02), change: (Math.random() - 0.5) * 5 },
-            { symbol: 'TRX', price: 0.12 + (Math.random() * 0.02), change: (Math.random() - 0.5) * 5 }
-        ];
-
-        for (const priceData of defaultPrices) {
-            try {
-                await Price.findOneAndUpdate(
-                    { symbol: priceData.symbol },
-                    {
-                        ...priceData,
-                        price: Math.max(0.001, priceData.price),
-                        lastUpdate: new Date()
-                    },
-                    { upsert: true, new: true }
-                );
-                console.log(`✅ Price initialized for ${priceData.symbol}: $${priceData.price.toFixed(4)}`);
-            } catch (error) {
-                console.error(`❌ Error initializing price for ${priceData.symbol}:`, error);
-            }
-        }
-    } catch (error) {
-        console.error('❌ Error in price initialization:', error);
-    }
-}
-
-// Enhanced price update simulation
-function simulatePriceUpdates() {
-    setInterval(async () => {
-        if (!isInitialized) return;
-        
-        try {
-            const prices = await Price.find();
-            
-            for (const price of prices) {
-                // More realistic price movements
-                const baseVolatility = 0.01; // 1%
-                const timeVolatility = Math.random() * 0.02; // 0-2%
-                const marketTrend = Math.sin(Date.now() / 3600000) * 0.005; // Hourly trend
-                
-                const changePercent = (Math.random() - 0.5) * (baseVolatility + timeVolatility) + marketTrend;
-                const newPrice = Math.max(0.001, price.price * (1 + changePercent));
-                const change = ((newPrice - price.price) / price.price) * 100;
-                
-                // Update dengan validation
-                price.price = parseFloat(newPrice.toFixed(price.symbol === 'BTC' ? 0 : 6));
-                price.change = parseFloat(change.toFixed(2));
-                price.lastUpdate = new Date();
-                
-                await price.save();
-                
-                // Broadcast price update
-                io.emit('priceUpdate', {
-                    symbol: price.symbol,
-                    price: price.price,
-                    change: price.change,
-                    lastUpdate: price.lastUpdate
-                });
-                
-                // Update chart data untuk semua timeframes
-                const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-                
-                for (const timeframe of timeframes) {
-                    const key = `${price.symbol}-${timeframe}`;
-                    const currentCandles = chartDataStore.get(key) || [];
-                    const lastCandle = currentCandles[currentCandles.length - 1];
-                    
-                    const newCandle = generateCandleFromPrice(price.symbol, timeframe, price.price, lastCandle);
-                    
-                    if (newCandle && newCandle.time && !isNaN(newCandle.time)) {
-                        // Update or add new candle
-                        if (lastCandle && lastCandle.time === newCandle.time) {
-                            currentCandles[currentCandles.length - 1] = newCandle;
-                        } else {
-                            currentCandles.push(newCandle);
-                            // Keep only last 200 candles
-                            if (currentCandles.length > 200) {
-                                currentCandles.shift();
-                            }
-                        }
-                        
-                        chartDataStore.set(key, currentCandles);
-                        
-                        // Broadcast chart update (reduced frequency)
-                        if (Math.random() < 0.1) { // 10% chance to broadcast
-                            io.emit('chartUpdate', {
-                                symbol: price.symbol,
-                                timeframe: timeframe,
-                                candle: newCandle
-                            });
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('❌ Error updating prices:', error);
-        }
-    }, 2000); // Update every 2 seconds
-}
-
-// Enhanced trade completion checker
-function checkTradesToComplete() {
-    setInterval(async () => {
-        try {
-            const now = new Date();
-            const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
-            
-            for (const trade of activeTrades) {
-                const createdAt = new Date(trade.createdAt);
-                const elapsedSeconds = Math.floor((now - createdAt) / 1000);
-                
-                if (elapsedSeconds >= trade.duration) {
-                    // Get current price
-                    const currentPrice = await Price.findOne({ symbol: trade.symbol });
-                    
-                    if (currentPrice && currentPrice.price > 0) {
-                        trade.exitPrice = currentPrice.price;
-                        trade.status = 'completed';
-                        trade.completedAt = now;
-                        
-                        // Calculate price change
-                        const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
-                        trade.priceChangePercent = priceChangePercent;
-                        
-                        // Enhanced result determination dengan validasi admin settings
-                        let result;
-                        
-                        // Check admin settings first dengan prioritas
-                        if (trade.userId.adminSettings?.profitCollapse === 'profit') {
-                            result = 'win';
-                            trade.adminForced = true;
-                            trade.forceResult = 'win';
-                        } else if (trade.userId.adminSettings?.profitCollapse === 'collapse') {
-                            result = 'lose';
-                            trade.adminForced = true;
-                            trade.forceResult = 'lose';
-                        } else if (trade.forceResult) {
-                            result = trade.forceResult;
-                            trade.adminForced = true;
-                        } else if (trade.userId.adminSettings?.forceWin && trade.userId.adminSettings.forceWinRate > 0) {
-                            const winChance = Math.random() * 100;
-                            if (winChance <= trade.userId.adminSettings.forceWinRate) {
-                                result = 'win';
-                                trade.adminForced = true;
-                            } else {
-                                result = 'lose';
-                                trade.adminForced = true;
-                            }
-                        } else {
-                            // Natural market result
-                            if (trade.direction === 'buy') {
-                                result = currentPrice.price > trade.entryPrice ? 'win' : 'lose';
-                            } else {
-                                result = currentPrice.price < trade.entryPrice ? 'win' : 'lose';
-                            }
-                        }
-                        
-                        trade.result = result;
-                        
-                        // Enhanced payout calculation dengan validation
-                        const profitPercentage = Math.max(20, Math.min(100, 
-                            trade.profitPercentage || 
-                            trade.userId.adminSettings?.profitPercentage || 
-                            80
-                        ));
-                        
-                        if (result === 'win') {
-                            const profitAmount = trade.amount * profitPercentage / 100;
-                            trade.payout = trade.amount + profitAmount;
-                            trade.userId.balance += trade.payout;
-                            trade.userId.totalProfit += profitAmount;
-                        } else {
-                            trade.payout = 0;
-                            trade.userId.totalLoss += trade.amount;
-                        }
-                        
-                        // Update user stats dengan validation
-                        trade.userId.stats.totalTrades = (trade.userId.stats.totalTrades || 0) + 1;
-                        if (result === 'win') {
-                            trade.userId.stats.winTrades = (trade.userId.stats.winTrades || 0) + 1;
-                        } else {
-                            trade.userId.stats.loseTrades = (trade.userId.stats.loseTrades || 0) + 1;
-                        }
-                        
-                        await trade.save();
-                        await trade.userId.save();
-                        
-                        // Enhanced activity logging
-                        await logActivity(
-                            trade.userId._id, 
-                            'TRADE_COMPLETED', 
-                            `${trade.symbol} ${trade.direction.toUpperCase()} ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''}`
-                        );
-                        
-                        // Notify user via socket
-                        io.to(trade.userId._id.toString()).emit('tradeCompleted', {
-                            trade: {
-                                _id: trade._id,
-                                symbol: trade.symbol,
-                                direction: trade.direction,
-                                amount: trade.amount,
-                                result: trade.result,
-                                payout: trade.payout,
-                                adminForced: trade.adminForced
-                            },
-                            result,
-                            payout: trade.payout,
-                            newBalance: trade.userId.balance
-                        });
-                        
-                        console.log(`✅ Trade completed: ${trade._id} - ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('❌ Error checking trades:', error);
-        }
-    }, 1000); // Check every second
-}
-
-// Enhanced database connection check middleware
 const checkDatabaseConnection = (req, res, next) => {
     if (mongoose.connection.readyState !== 1) {
         return res.status(503).json({ 
@@ -820,7 +456,6 @@ const checkDatabaseConnection = (req, res, next) => {
     next();
 };
 
-// Enhanced authentication middleware
 const authenticateToken = async (req, res, next) => {
     try {
         const authHeader = req.headers['authorization'];
@@ -845,16 +480,18 @@ const authenticateToken = async (req, res, next) => {
         req.user = user;
         next();
     } catch (error) {
-        if (error.name === 'TokenExpiredError') {
-            return res.status(403).json({ error: 'Token expired' });
-        } else if (error.name === 'JsonWebTokenError') {
-            return res.status(403).json({ error: 'Invalid token' });
-        }
-        return res.status(403).json({ error: 'Token verification failed' });
+        const errorMessages = {
+            'TokenExpiredError': 'Token expired',
+            'JsonWebTokenError': 'Invalid token',
+            default: 'Token verification failed'
+        };
+        
+        return res.status(403).json({ 
+            error: errorMessages[error.name] || errorMessages.default 
+        });
     }
 };
 
-// Enhanced admin middleware
 const requireAdmin = async (req, res, next) => {
     try {
         if (!req.user || req.user.email !== 'admin@tradestation.com') {
@@ -866,178 +503,235 @@ const requireAdmin = async (req, res, next) => {
     }
 };
 
-// Utility function untuk format currency
-function formatCurrency(amount) {
-    return new Intl.NumberFormat('id-ID', {
-        style: 'currency',
-        currency: 'IDR',
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0
-    }).format(amount || 0);
-}
-
-// Validasi functions terbaik
-function isValidEmail(email) {
-    if (!email || typeof email !== 'string') return false;
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email.trim());
-}
-
-function isValidPhone(phone) {
-    if (!phone || typeof phone !== 'string') return false;
-    // Mendukung format Indonesia: 08xxx, +628xxx, 628xxx, atau international
-    const phoneRegex = /^(\+?62|0)[0-9]{9,13}$/;
-    const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Remove spaces, dashes, parentheses
-    return phoneRegex.test(cleanPhone);
-}
-
 // ========================================
-// DATABASE OPTIMIZATION MIDDLEWARE
+// 🎯 CORE BUSINESS LOGIC
 // ========================================
 
-// Connection monitoring
-mongoose.connection.on('connected', () => {
-    console.log('✅ MongoDB connected successfully');
-});
-
-mongoose.connection.on('error', (err) => {
-    console.error('❌ MongoDB connection error:', err);
-});
-
-mongoose.connection.on('disconnected', () => {
-    console.log('⚠️ MongoDB disconnected');
-});
-
-// Memory monitoring
-setInterval(() => {
-    const used = process.memoryUsage();
-    const memoryUsage = {
-        rss: Math.round(used.rss / 1024 / 1024 * 100) / 100,
-        heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100,
-        heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100,
-        external: Math.round(used.external / 1024 / 1024 * 100) / 100
-    };
-    
-    if (memoryUsage.heapUsed > 200) { // Alert if heap > 200MB
-        console.log('⚠️ High memory usage:', memoryUsage);
-    }
-}, 30000); // Check every 30 seconds
-
-// ========================================
-// ERROR HANDLING UNTUK UNHANDLED PROMISES
-// ========================================
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    process.exit(1);
-});
-
-// ========================================
-// DATABASE INDEX OPTIMIZATION
-// ========================================
-
-async function ensureIndexes() {
+// Enhanced price initialization
+const initializePrices = async () => {
     try {
-        // Deposit indexes
-        await Deposit.collection.createIndex({ status: 1, createdAt: -1 });
-        await Deposit.collection.createIndex({ userId: 1, createdAt: -1 });
-        await Deposit.collection.createIndex({ createdAt: -1 });
+        const defaultPrices = [
+            { symbol: 'BTC', price: 45000 + (Math.random() * 10000), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'ETH', price: 3200 + (Math.random() * 500), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'LTC', price: 180 + (Math.random() * 20), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'XRP', price: 0.65 + (Math.random() * 0.1), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'DOGE', price: 0.08 + (Math.random() * 0.02), change: (Math.random() - 0.5) * 5 },
+            { symbol: 'TRX', price: 0.12 + (Math.random() * 0.02), change: (Math.random() - 0.5) * 5 }
+        ];
+
+        for (const priceData of defaultPrices) {
+            await Price.findOneAndUpdate(
+                { symbol: priceData.symbol },
+                {
+                    ...priceData,
+                    price: Math.max(0.001, priceData.price),
+                    lastUpdate: new Date()
+                },
+                { upsert: true, new: true }
+            );
+        }
         
-        // User indexes
-        await User.collection.createIndex({ email: 1 }, { sparse: true });
-        await User.collection.createIndex({ phone: 1 }, { sparse: true });
-        
-        // Trade indexes
-        await Trade.collection.createIndex({ userId: 1, status: 1, createdAt: -1 });
-        await Trade.collection.createIndex({ status: 1, createdAt: -1 });
-        
-        console.log('✅ Database indexes ensured');
+        console.log('✅ Prices initialized successfully');
     } catch (error) {
-        console.error('❌ Error creating indexes:', error);
+        console.error('❌ Error initializing prices:', error);
     }
-}
+};
+
+// Enhanced price simulation
+const simulatePriceUpdates = () => {
+    setInterval(async () => {
+        if (!isInitialized) return;
+        
+        try {
+            const prices = await Price.find();
+            
+            for (const price of prices) {
+                const volatility = 0.008 + Math.random() * 0.012; // 0.8% - 2%
+                const changePercent = (Math.random() - 0.5) * volatility;
+                const newPrice = Math.max(0.001, price.price * (1 + changePercent));
+                const change = ((newPrice - price.price) / price.price) * 100;
+                
+                price.price = parseFloat(newPrice.toFixed(price.symbol === 'BTC' ? 0 : 6));
+                price.change = parseFloat(change.toFixed(2));
+                price.lastUpdate = new Date();
+                
+                await price.save();
+                
+                // Broadcast to connected clients
+                io.emit('priceUpdate', {
+                    symbol: price.symbol,
+                    price: price.price,
+                    change: price.change,
+                    lastUpdate: price.lastUpdate
+                });
+            }
+        } catch (error) {
+            console.error('❌ Error updating prices:', error);
+        }
+    }, 3000); // Update every 3 seconds
+};
+
+// Enhanced trade completion checker
+const checkTradesToComplete = () => {
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const activeTrades = await Trade.find({ status: 'active' }).populate('userId');
+            
+            for (const trade of activeTrades) {
+                const elapsedSeconds = Math.floor((now - new Date(trade.createdAt)) / 1000);
+                
+                if (elapsedSeconds >= trade.duration) {
+                    const currentPrice = await Price.findOne({ symbol: trade.symbol });
+                    
+                    if (currentPrice && currentPrice.price > 0) {
+                        await completeTradeLogic(trade, currentPrice, now);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('❌ Error checking trades:', error);
+        }
+    }, 1000);
+};
+
+// Enhanced trade completion logic
+const completeTradeLogic = async (trade, currentPrice, now) => {
+    try {
+        trade.exitPrice = currentPrice.price;
+        trade.status = 'completed';
+        trade.completedAt = now;
+        
+        const priceChangePercent = ((currentPrice.price - trade.entryPrice) / trade.entryPrice) * 100;
+        trade.priceChangePercent = priceChangePercent;
+        
+        // Determine result with admin settings priority
+        let result = determineTradeResult(trade, currentPrice);
+        trade.result = result;
+        
+        // Calculate payout
+        const profitPercentage = Math.max(20, Math.min(100, 
+            trade.profitPercentage || 
+            trade.userId.adminSettings?.profitPercentage || 
+            80
+        ));
+        
+        if (result === 'win') {
+            const profitAmount = trade.amount * profitPercentage / 100;
+            trade.payout = trade.amount + profitAmount;
+            trade.userId.balance += trade.payout;
+            trade.userId.totalProfit += profitAmount;
+            trade.userId.stats.winTrades += 1;
+        } else {
+            trade.payout = 0;
+            trade.userId.totalLoss += trade.amount;
+            trade.userId.stats.loseTrades += 1;
+        }
+        
+        // Update stats
+        trade.userId.stats.totalTrades += 1;
+        
+        await Promise.all([trade.save(), trade.userId.save()]);
+        
+        // Log activity
+        await logActivity(
+            trade.userId._id, 
+            'TRADE_COMPLETED', 
+            `${trade.symbol} ${trade.direction.toUpperCase()} ${result.toUpperCase()} - ${formatCurrency(trade.payout)}`
+        );
+        
+        // Send notification
+        sendUserNotification(trade.userId._id, 'tradeCompleted', {
+            trade: {
+                _id: trade._id,
+                symbol: trade.symbol,
+                direction: trade.direction,
+                amount: trade.amount,
+                result: trade.result,
+                payout: trade.payout,
+                adminForced: trade.adminForced
+            },
+            result,
+            payout: trade.payout,
+            newBalance: trade.userId.balance
+        });
+        
+        console.log(`✅ Trade completed: ${trade._id} - ${result.toUpperCase()} - ${formatCurrency(trade.payout)}`);
+        
+    } catch (error) {
+        console.error('❌ Error completing trade:', error);
+    }
+};
+
+const determineTradeResult = (trade, currentPrice) => {
+    // Check admin settings first
+    if (trade.userId.adminSettings?.profitCollapse === 'profit') {
+        trade.adminForced = true;
+        trade.forceResult = 'win';
+        return 'win';
+    } else if (trade.userId.adminSettings?.profitCollapse === 'collapse') {
+        trade.adminForced = true;
+        trade.forceResult = 'lose';
+        return 'lose';
+    } else if (trade.forceResult) {
+        trade.adminForced = true;
+        return trade.forceResult;
+    } else if (trade.userId.adminSettings?.forceWin && trade.userId.adminSettings.forceWinRate > 0) {
+        const winChance = Math.random() * 100;
+        if (winChance <= trade.userId.adminSettings.forceWinRate) {
+            trade.adminForced = true;
+            return 'win';
+        } else {
+            trade.adminForced = true;
+            return 'lose';
+        }
+    } else {
+        // Natural market result
+        if (trade.direction === 'buy') {
+            return currentPrice.price > trade.entryPrice ? 'win' : 'lose';
+        } else {
+            return currentPrice.price < trade.entryPrice ? 'win' : 'lose';
+        }
+    }
+};
 
 // ========================================
-// PUBLIC ROUTES
+// 🌐 PUBLIC ROUTES
 // ========================================
 
-// Enhanced root route
 app.get('/', (req, res) => {
     res.json({
-        message: 'TradeStation Backend API - Versi Sempurna Terbaru',
-        version: '4.0.0',
-        status: 'Running Perfectly',
+        message: 'TradeStation Backend API - Versi Enhanced Perfect',
+        version: '5.0.0',
+        status: 'Running Optimally',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         features: [
-            'Enhanced Email/Phone Authentication System',
-            'Robust Admin Panel dengan Timeout Protection',
-            'Performance Optimization untuk Banyak User',
-            'Advanced Monitoring & Debugging Tools',
-            'Mobile-First Trading Experience',
-            'Real-time Chart Data dengan WebSocket',
-            'Bank Account Management System', 
-            'File Upload Support untuk Receipt', 
-            'Advanced Admin Trading Control', 
-            'Dynamic Profit Settings per User',
-            'Enhanced Mobile UI Response',
-            'Complete Admin Panel dengan Notifications',
-            'Enhanced Security & Validation',
-            'CORS Protection untuk Production',
-            'Rate Limiting untuk Security',
-            'Database Connection Monitoring',
-            'Memory Usage Tracking'
-        ],
-        improvements: [
-            'Gabungan terbaik dari kedua sistem',
-            'Enhanced CORS configuration untuk semua environment',
-            'User bank data management yang lebih robust',
-            'Real-time notifications untuk withdrawal',
-            'Enhanced socket connection management',
-            'Better error handling untuk production',
-            'Database query timeout handling',
-            'Memory usage optimization',
-            'Enhanced authentication security'
-        ],
-        endpoints: {
-            health: 'GET /api/health',
-            databaseHealth: 'GET /api/admin/health/database',
-            register: 'POST /api/register',
-            login: 'POST /api/login',
-            prices: 'GET /api/prices',
-            chart: 'GET /api/chart/:symbol/:timeframe',
-            profile: 'GET /api/profile (auth required)',
-            bank: 'GET /api/profile/bank (auth required)',
-            trading: 'POST /api/trade (auth required)',
-            admin: '/api/admin/* (admin required)'
-        }
+            'Enhanced Email/Phone Authentication',
+            'Optimized Admin Panel',
+            'Robust Error Handling',
+            'Advanced Security',
+            'Real-time Trading System',
+            'Enhanced Validation',
+            'Memory Optimization',
+            'Performance Monitoring'
+        ]
     });
 });
 
-// Enhanced health check
 app.get('/api/health', (req, res) => {
     const health = {
-        status: 'OK', 
-        message: 'TradeStation Backend berjalan dengan sempurna - Versi Terbaru',
+        status: 'OK',
+        message: 'TradeStation Backend running perfectly',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
         database: {
             status: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
             readyState: mongoose.connection.readyState
         },
         server: {
-            port: process.env.PORT || 3000,
             uptime: process.uptime(),
-            memory: process.memoryUsage()
-        },
-        features: {
-            chartDataSets: chartDataStore.size,
-            initialized: isInitialized,
-            allowedOrigins: allowedOrigins.length
+            memory: process.memoryUsage(),
+            nodeVersion: process.version
         }
     };
     
@@ -1045,111 +739,24 @@ app.get('/api/health', (req, res) => {
     res.status(statusCode).json(health);
 });
 
-// Enhanced chart data route
-app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
-    try {
-        const { symbol, timeframe } = req.params;
-        
-        console.log(`📊 Chart data requested: ${symbol}/${timeframe}`);
-        
-        // Enhanced validation
-        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-        if (!validTimeframes.includes(timeframe)) {
-            return res.status(400).json({ 
-                error: 'Invalid timeframe',
-                validTimeframes: validTimeframes,
-                provided: timeframe
-            });
-        }
-        
-        // Check if symbol exists
-        const priceData = await Price.findOne({ symbol: symbol.toUpperCase() });
-        if (!priceData) {
-            const availableSymbols = await Price.find().distinct('symbol');
-            return res.status(404).json({ 
-                error: 'Symbol not found',
-                availableSymbols: availableSymbols,
-                provided: symbol
-            });
-        }
-        
-        const key = `${symbol.toUpperCase()}-${timeframe}`;
-        let chartData = chartDataStore.get(key);
-        
-        // Enhanced data generation jika belum ada
-        if (!chartData || chartData.length === 0) {
-            console.log(`📊 Generating fresh data for ${symbol}/${timeframe}`);
-            chartData = await generateHistoricalData(symbol.toUpperCase(), timeframe, 100);
-            
-            if (chartData && chartData.length > 0) {
-                chartDataStore.set(key, chartData);
-                console.log(`✅ Fresh data generated: ${chartData.length} candles`);
-            } else {
-                return res.status(500).json({ 
-                    error: 'Failed to generate chart data',
-                    symbol: symbol,
-                    timeframe: timeframe
-                });
-            }
-        }
-        
-        // Enhanced data validation
-        const validatedData = chartData.filter(candle => 
-            candle && 
-            typeof candle.time === 'number' &&
-            typeof candle.open === 'number' &&
-            typeof candle.high === 'number' &&
-            typeof candle.low === 'number' &&
-            typeof candle.close === 'number' &&
-            candle.time > 0 &&
-            candle.open > 0 &&
-            candle.high > 0 &&
-            candle.low > 0 &&
-            candle.close > 0 &&
-            candle.high >= Math.max(candle.open, candle.close) &&
-            candle.low <= Math.min(candle.open, candle.close)
-        );
-        
-        const response = {
-            symbol: symbol.toUpperCase(),
-            timeframe,
-            candlestick: validatedData,
-            count: validatedData.length,
-            currentPrice: priceData.price,
-            lastUpdate: priceData.lastUpdate,
-            metadata: {
-                generated: new Date().toISOString(),
-                source: 'TradeStation API v4.0.0 - Versi Sempurna'
-            }
-        };
-        
-        res.json(response);
-        
-        console.log(`✅ Chart data sent: ${validatedData.length} candles for ${symbol}/${timeframe}`);
-        
-    } catch (error) {
-        console.error('❌ Chart data error:', error);
-        res.status(500).json({ 
-            error: 'Failed to load chart data',
-            message: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
-
 // ========================================
-// AUTH ROUTES - TERBAIK DARI KEDUA SISTEM
+// 🔐 ENHANCED AUTHENTICATION ROUTES
 // ========================================
 
-// REGISTER ROUTE dengan validasi terbaik
+// ENHANCED REGISTER ROUTE - PERFECT IMPLEMENTATION
 app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { name, email, phone, password } = req.body;
         
-        console.log('📝 Register request:', { name, email: !!email, phone: !!phone, password: !!password });
+        console.log('📝 Register request:', { 
+            name: !!name, 
+            email: !!email, 
+            phone: !!phone, 
+            password: !!password 
+        });
         
         // Enhanced validation
-        if (!name || name.trim().length < 2) {
+        if (!name?.trim() || name.trim().length < 2) {
             return res.status(400).json({ error: 'Nama harus minimal 2 karakter' });
         }
 
@@ -1157,43 +764,44 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             return res.status(400).json({ error: 'Password harus minimal 6 karakter' });
         }
 
-        // User harus punya email ATAU phone (tidak keduanya wajib)
+        // Must have email OR phone
         if (!email && !phone) {
             return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
         }
         
-        // Validasi email jika ada
+        // Validate email if provided
         if (email && !isValidEmail(email)) {
             return res.status(400).json({ error: 'Format email tidak valid' });
         }
         
-        // Validasi phone jika ada
+        // Validate phone if provided  
         if (phone && !isValidPhone(phone)) {
             return res.status(400).json({ error: 'Format nomor HP tidak valid. Gunakan format: 08xxx atau +628xxx' });
         }
         
-        // Check existing user dengan logic yang lebih baik
-        let existingUser = null;
-        
+        // Check existing users
+        const existingQuery = [];
         if (email) {
-            existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-            if (existingUser) {
-                return res.status(400).json({ error: 'Email sudah terdaftar' });
-            }
+            existingQuery.push({ email: email.toLowerCase().trim() });
         }
-        
         if (phone) {
-            const cleanPhone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone number
-            existingUser = await User.findOne({ phone: cleanPhone });
+            existingQuery.push({ phone: sanitizePhone(phone) });
+        }
+        
+        if (existingQuery.length > 0) {
+            const existingUser = await User.findOne({ $or: existingQuery });
             if (existingUser) {
-                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+                if (existingUser.email === email?.toLowerCase().trim()) {
+                    return res.status(400).json({ error: 'Email sudah terdaftar' });
+                }
+                if (existingUser.phone === sanitizePhone(phone)) {
+                    return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
+                }
             }
         }
         
-        // Enhanced password hashing
+        // Create user data
         const hashedPassword = await bcrypt.hash(password, 12);
-        
-        // Create user dengan data yang bersih
         const userData = {
             name: name.trim(),
             password: hashedPassword,
@@ -1212,26 +820,14 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             }
         };
 
-        // Hanya set field yang ada datanya
-        if (email) {
-            userData.email = email.toLowerCase().trim();
-        }
-        if (phone) {
-            userData.phone = phone.replace(/[\s\-\(\)]/g, ''); // Clean phone
-        }
-        
-        console.log('📝 Creating user with data:', { 
-            name: userData.name, 
-            email: userData.email, 
-            phone: userData.phone,
-            hasPassword: !!userData.password 
-        });
+        if (email) userData.email = email.toLowerCase().trim();
+        if (phone) userData.phone = sanitizePhone(phone);
         
         const user = new User(userData);
         await user.save();
         
-        // Enhanced activity logging
-        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${email || phone}`, req);
+        // Log activity
+        await logActivity(user._id, 'USER_REGISTER', `New user: ${email || phone}`, req);
         
         // Generate token
         const token = jwt.sign(
@@ -1240,7 +836,7 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
             { expiresIn: '7d' }
         );
         
-        // Remove password from response
+        // Response without password
         const userResponse = user.toObject();
         delete userResponse.password;
         
@@ -1255,15 +851,12 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
     } catch (error) {
         console.error('❌ Registration error:', error);
         
-        // Handle MongoDB errors
+        // Handle specific errors
         if (error.code === 11000) {
-            if (error.keyPattern.email) {
-                return res.status(400).json({ error: 'Email sudah terdaftar' });
-            }
-            if (error.keyPattern.phone) {
-                return res.status(400).json({ error: 'Nomor HP sudah terdaftar' });
-            }
-            return res.status(400).json({ error: 'Data sudah terdaftar' });
+            const field = Object.keys(error.keyPattern)[0];
+            return res.status(400).json({ 
+                error: field === 'email' ? 'Email sudah terdaftar' : 'Nomor HP sudah terdaftar' 
+            });
         }
         
         if (error.name === 'ValidationError') {
@@ -1278,12 +871,10 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
     }
 });
 
-// LOGIN ROUTE dengan validasi terbaik
+// ENHANCED LOGIN ROUTE
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { email, phone, password } = req.body;
-        
-        console.log('📝 Login request:', { email: !!email, phone: !!phone, password: !!password });
         
         if (!password) {
             return res.status(400).json({ error: 'Password diperlukan' });
@@ -1293,22 +884,15 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
         }
         
-        // Find user dengan logic yang lebih baik
+        // Find user
         let user = null;
         
-        if (email) {
-            // Coba cari dengan email
-            if (isValidEmail(email)) {
-                user = await User.findOne({ email: email.toLowerCase().trim() });
-            }
+        if (email && isValidEmail(email)) {
+            user = await User.findOne({ email: email.toLowerCase().trim() });
         }
         
-        if (!user && phone) {
-            // Jika tidak ketemu dengan email, coba dengan phone
-            const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
-            if (isValidPhone(cleanPhone)) {
-                user = await User.findOne({ phone: cleanPhone });
-            }
+        if (!user && phone && isValidPhone(phone)) {
+            user = await User.findOne({ phone: sanitizePhone(phone) });
         }
         
         if (!user) {
@@ -1328,7 +912,7 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         user.lastLoginAt = new Date();
         await user.save();
         
-        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email || phone}`, req);
+        await logActivity(user._id, 'USER_LOGIN', `Login: ${email || phone}`, req);
         
         const token = jwt.sign(
             { userId: user._id },
@@ -1354,7 +938,7 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
 });
 
 // ========================================
-// USER ROUTES
+// 👤 USER ROUTES  
 // ========================================
 
 app.get('/api/profile', authenticateToken, async (req, res) => {
@@ -1367,34 +951,6 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
     }
 });
 
-app.put('/api/profile', authenticateToken, async (req, res) => {
-    try {
-        const { name, phone } = req.body;
-        
-        const updateData = {};
-        if (name && name.trim().length >= 2) {
-            updateData.name = name.trim();
-        }
-        if (phone) {
-            updateData.phone = phone;
-        }
-        
-        const user = await User.findByIdAndUpdate(
-            req.userId,
-            updateData,
-            { new: true }
-        ).select('-password');
-        
-        await logActivity(req.userId, 'PROFILE_UPDATE', 'Profile updated', req);
-        
-        res.json(user);
-    } catch (error) {
-        console.error('❌ Profile update error:', error);
-        res.status(500).json({ error: 'Failed to update profile' });
-    }
-});
-
-// Bank Data Routes - ENHANCED
 app.get('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
         const user = await User.findById(req.userId).select('bankData');
@@ -1408,7 +964,7 @@ app.put('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
         const { bankName, accountNumber, accountHolder } = req.body;
         
-        if (!bankName || !accountNumber || !accountHolder) {
+        if (!bankName?.trim() || !accountNumber?.trim() || !accountHolder?.trim()) {
             return res.status(400).json({ error: 'All bank data fields are required' });
         }
         
@@ -1424,7 +980,7 @@ app.put('/api/profile/bank', authenticateToken, async (req, res) => {
             { new: true }
         );
         
-        await logActivity(req.userId, 'BANK_DATA_UPDATE', `Bank data updated: ${bankName}`, req);
+        await logActivity(req.userId, 'BANK_DATA_UPDATE', `Bank: ${bankName.trim()}`, req);
         
         res.json(user.bankData);
     } catch (error) {
@@ -1432,32 +988,10 @@ app.put('/api/profile/bank', authenticateToken, async (req, res) => {
     }
 });
 
-// Active Bank Accounts untuk Deposit - ENHANCED
-app.get('/api/bank-accounts/active', async (req, res) => {
-    try {
-        const accounts = await BankAccount.find({ isActive: true })
-            .select('bankName accountNumber accountHolder note')
-            .sort({ createdAt: -1 });
-        
-        // Transform untuk frontend
-        const transformedAccounts = accounts.map(account => ({
-            _id: account._id,
-            bankName: account.bankName,
-            accountNumber: account.accountNumber,
-            accountHolder: account.accountHolder,
-            note: account.note,
-            isActive: true
-        }));
-        
-        res.json(transformedAccounts);
-        
-    } catch (error) {
-        console.error('❌ Error loading active bank accounts:', error);
-        res.status(500).json({ error: 'Failed to load bank accounts' });
-    }
-});
+// ========================================
+// 💰 TRADING ROUTES
+// ========================================
 
-// Price Routes
 app.get('/api/prices', async (req, res) => {
     try {
         const prices = await Price.find().sort({ symbol: 1 }).select('-__v');
@@ -1468,16 +1002,11 @@ app.get('/api/prices', async (req, res) => {
     }
 });
 
-// ========================================
-// TRADING ROUTES - ENHANCED
-// ========================================
-
-// Enhanced trading route
 app.post('/api/trade', authenticateToken, async (req, res) => {
     try {
         const { symbol, direction, amount, duration } = req.body;
         
-        // Enhanced validation
+        // Validation
         if (!symbol || !direction || !amount || !duration) {
             return res.status(400).json({ error: 'All fields are required' });
         }
@@ -1504,67 +1033,81 @@ app.post('/api/trade', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Invalid symbol or price not available' });
         }
         
-        // Get profit percentage dari user settings dengan validation
+        // Get profit percentage
         const profitPercentage = Math.max(20, Math.min(100, 
             req.user.adminSettings?.profitPercentage || 80
         ));
         
-        // Deduct amount from user balance
-        req.user.balance -= amount;
-        await req.user.save();
+        // Use session for atomic operation
+        const session = await mongoose.startSession();
         
-        // Create trade dengan enhanced settings
-        const trade = new Trade({
-            userId: req.userId,
-            symbol: symbol.toUpperCase(),
-            direction,
-            amount,
-            profitPercentage,
-            duration,
-            entryPrice: currentPrice.price
-        });
-        
-        await trade.save();
-        
-        // Enhanced activity logging
-        await logActivity(
-            req.userId, 
-            'TRADE_CREATED', 
-            `${symbol.toUpperCase()} ${direction.toUpperCase()} ${formatCurrency(amount)} - ${duration}s`,
-            req
-        );
-        
-        // Notify via socket
-        io.to(req.userId.toString()).emit('tradeCreated', {
-            trade: {
-                _id: trade._id,
-                symbol: trade.symbol,
-                direction: trade.direction,
-                amount: trade.amount,
-                duration: trade.duration,
-                entryPrice: trade.entryPrice,
-                profitPercentage: trade.profitPercentage
-            },
-            newBalance: req.user.balance
-        });
-        
-        res.status(201).json({
-            message: 'Trade created successfully',
-            trade: {
-                _id: trade._id,
-                symbol: trade.symbol,
-                direction: trade.direction,
-                amount: trade.amount,
-                duration: trade.duration,
-                entryPrice: trade.entryPrice,
-                profitPercentage: trade.profitPercentage,
-                status: trade.status,
-                createdAt: trade.createdAt
-            },
-            newBalance: req.user.balance
-        });
-        
-        console.log(`✅ Trade created: ${trade.symbol} ${trade.direction} ${formatCurrency(trade.amount)}`);
+        try {
+            session.startTransaction();
+            
+            // Deduct balance
+            req.user.balance -= amount;
+            await req.user.save({ session });
+            
+            // Create trade
+            const trade = new Trade({
+                userId: req.userId,
+                symbol: symbol.toUpperCase(),
+                direction,
+                amount,
+                profitPercentage,
+                duration,
+                entryPrice: currentPrice.price
+            });
+            
+            await trade.save({ session });
+            await session.commitTransaction();
+            
+            // Log activity
+            await logActivity(
+                req.userId, 
+                'TRADE_CREATED', 
+                `${symbol.toUpperCase()} ${direction.toUpperCase()} ${formatCurrency(amount)} - ${duration}s`,
+                req
+            );
+            
+            // Send notification
+            sendUserNotification(req.userId, 'tradeCreated', {
+                trade: {
+                    _id: trade._id,
+                    symbol: trade.symbol,
+                    direction: trade.direction,
+                    amount: trade.amount,
+                    duration: trade.duration,
+                    entryPrice: trade.entryPrice,
+                    profitPercentage: trade.profitPercentage
+                },
+                newBalance: req.user.balance
+            });
+            
+            res.status(201).json({
+                message: 'Trade created successfully',
+                trade: {
+                    _id: trade._id,
+                    symbol: trade.symbol,
+                    direction: trade.direction,
+                    amount: trade.amount,
+                    duration: trade.duration,
+                    entryPrice: trade.entryPrice,
+                    profitPercentage: trade.profitPercentage,
+                    status: trade.status,
+                    createdAt: trade.createdAt
+                },
+                newBalance: req.user.balance
+            });
+            
+            console.log(`✅ Trade created: ${trade.symbol} ${trade.direction} ${formatCurrency(trade.amount)}`);
+            
+        } catch (transactionError) {
+            await session.abortTransaction();
+            throw transactionError;
+        } finally {
+            session.endSession();
+        }
         
     } catch (error) {
         console.error('❌ Trade error:', error);
@@ -1594,8 +1137,21 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
 });
 
 // ========================================
-// DEPOSIT ROUTES - ENHANCED
+// 💳 DEPOSIT & WITHDRAWAL ROUTES
 // ========================================
+
+app.get('/api/bank-accounts/active', async (req, res) => {
+    try {
+        const accounts = await BankAccount.find({ isActive: true })
+            .select('bankName accountNumber accountHolder note')
+            .sort({ createdAt: -1 });
+        
+        res.json(accounts);
+    } catch (error) {
+        console.error('❌ Error loading bank accounts:', error);
+        res.status(500).json({ error: 'Failed to load bank accounts' });
+    }
+});
 
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
@@ -1609,32 +1165,31 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Payment proof is required' });
         }
         
-        // Enhanced file validation
+        // File validation
         const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
         if (!allowedTypes.includes(fileType)) {
             return res.status(400).json({ error: 'Invalid file type. Only JPEG, PNG, and WebP are allowed.' });
         }
         
-        // Check file size (base64 length estimation)
+        // File size check
         const sizeInBytes = (receipt.length * 3) / 4;
-        if (sizeInBytes > 5 * 1024 * 1024) { // 5MB limit
+        if (sizeInBytes > 5 * 1024 * 1024) {
             return res.status(400).json({ error: 'File size too large. Maximum 5MB allowed.' });
         }
         
         const deposit = new Deposit({
             userId: req.userId,
             amount,
-            bankFrom: bankFrom || 'Not specified',
+            bankFrom: bankFrom?.trim() || 'Not specified',
             receipt,
-            fileName: fileName || 'payment_proof',
+            fileName: fileName?.trim() || 'payment_proof',
             fileType,
-            fileSize: sizeInBytes,
-            transferTime: new Date()
+            fileSize: sizeInBytes
         });
         
         await deposit.save();
         
-        await logActivity(req.userId, 'DEPOSIT_REQUEST', `Deposit request: ${formatCurrency(amount)}`, req);
+        await logActivity(req.userId, 'DEPOSIT_REQUEST', `Deposit: ${formatCurrency(amount)}`, req);
         
         res.status(201).json({
             message: 'Deposit request submitted successfully',
@@ -1659,7 +1214,7 @@ app.get('/api/deposits', authenticateToken, async (req, res) => {
     try {
         const deposits = await Deposit.find({ userId: req.userId })
             .sort({ createdAt: -1 })
-            .select('-receipt') // Don't send receipt data in list
+            .select('-receipt')
             .limit(50);
         
         res.json(deposits);
@@ -1668,10 +1223,6 @@ app.get('/api/deposits', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to load deposits' });
     }
 });
-
-// ========================================
-// WITHDRAWAL ROUTES - ENHANCED
-// ========================================
 
 app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
@@ -1687,11 +1238,11 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Insufficient balance' });
         }
         
-        if (!user.bankData || !user.bankData.bankName) {
+        if (!user.bankData?.bankName) {
             return res.status(400).json({ error: 'Bank data is required. Please update your bank information first.' });
         }
         
-        // Enhanced fee calculation
+        // Calculate fee
         const feePercentage = 0.01; // 1%
         const minimumFee = 6500;
         const fee = Math.max(minimumFee, amount * feePercentage);
@@ -1701,41 +1252,56 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Amount too small after fees' });
         }
         
-        // Deduct amount from user balance
-        user.balance -= amount;
-        await user.save();
+        // Use session for atomic operation
+        const session = await mongoose.startSession();
         
-        const withdrawal = new Withdrawal({
-            userId: req.userId,
-            amount,
-            fee,
-            finalAmount,
-            bankAccount: {
-                bankName: user.bankData.bankName,
-                accountNumber: user.bankData.accountNumber,
-                accountHolder: user.bankData.accountHolder
-            }
-        });
-        
-        await withdrawal.save();
-        
-        await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal request: ${formatCurrency(amount)} (net: ${formatCurrency(finalAmount)})`, req);
-        
-        res.status(201).json({
-            message: 'Withdrawal request submitted successfully',
-            withdrawal: {
-                _id: withdrawal._id,
-                amount: withdrawal.amount,
-                fee: withdrawal.fee,
-                finalAmount: withdrawal.finalAmount,
-                bankAccount: withdrawal.bankAccount,
-                status: withdrawal.status,
-                createdAt: withdrawal.createdAt
-            },
-            newBalance: user.balance
-        });
-        
-        console.log(`✅ Withdrawal request: ${formatCurrency(amount)} from user ${user.name}`);
+        try {
+            session.startTransaction();
+            
+            // Deduct balance
+            user.balance -= amount;
+            await user.save({ session });
+            
+            // Create withdrawal
+            const withdrawal = new Withdrawal({
+                userId: req.userId,
+                amount,
+                fee,
+                finalAmount,
+                bankAccount: {
+                    bankName: user.bankData.bankName,
+                    accountNumber: user.bankData.accountNumber,
+                    accountHolder: user.bankData.accountHolder
+                }
+            });
+            
+            await withdrawal.save({ session });
+            await session.commitTransaction();
+            
+            await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal: ${formatCurrency(amount)} (net: ${formatCurrency(finalAmount)})`, req);
+            
+            res.status(201).json({
+                message: 'Withdrawal request submitted successfully',
+                withdrawal: {
+                    _id: withdrawal._id,
+                    amount: withdrawal.amount,
+                    fee: withdrawal.fee,
+                    finalAmount: withdrawal.finalAmount,
+                    bankAccount: withdrawal.bankAccount,
+                    status: withdrawal.status,
+                    createdAt: withdrawal.createdAt
+                },
+                newBalance: user.balance
+            });
+            
+            console.log(`✅ Withdrawal request: ${formatCurrency(amount)} from user ${user.name}`);
+            
+        } catch (transactionError) {
+            await session.abortTransaction();
+            throw transactionError;
+        } finally {
+            session.endSession();
+        }
         
     } catch (error) {
         console.error('❌ Withdrawal error:', error);
@@ -1757,25 +1323,14 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
 });
 
 // ========================================
-// ADMIN ROUTES - ENHANCED DARI KEDUA SISTEM
+// 👑 ADMIN ROUTES (SIMPLIFIED & OPTIMIZED)
 // ========================================
 
-// Enhanced Admin Dashboard
 app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        // Enhanced statistics calculation dengan timeout
-        const [
-            totalUsers,
-            activeUsers,
-            totalTrades,
-            activeTrades,
-            totalDeposits,
-            pendingDeposits,
-            totalWithdrawals,
-            pendingWithdrawals,
-            totalBankAccounts,
-            activeBankAccounts
-        ] = await Promise.race([
+        const timeout = 10000; // 10 second timeout
+        
+        const stats = await Promise.race([
             Promise.all([
                 User.countDocuments(),
                 User.countDocuments({ isActive: true }),
@@ -1789,11 +1344,17 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
                 BankAccount.countDocuments({ isActive: true })
             ]),
             new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Dashboard query timeout')), 10000)
+                setTimeout(() => reject(new Error('Dashboard query timeout')), timeout)
             )
         ]);
         
-        // Enhanced volume stats
+        const [
+            totalUsers, activeUsers, totalTrades, activeTrades,
+            totalDeposits, pendingDeposits, totalWithdrawals, pendingWithdrawals,
+            totalBankAccounts, activeBankAccounts
+        ] = stats;
+        
+        // Calculate volume
         const completedTrades = await Trade.find({ status: 'completed' });
         const totalVolume = completedTrades.reduce((sum, trade) => sum + trade.amount, 0);
         
@@ -1805,13 +1366,13 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
         });
         const todayVolume = todayTrades.reduce((sum, trade) => sum + trade.amount, 0);
         
-        // Enhanced recent activities dengan better population
+        // Recent activities
         const recentActivities = await Activity.find()
             .populate('userId', 'name email phone')
             .sort({ createdAt: -1 })
             .limit(15);
         
-        const stats = {
+        const dashboardStats = {
             users: { total: totalUsers, active: activeUsers },
             trades: { total: totalTrades, active: activeTrades },
             deposits: { total: totalDeposits, pending: pendingDeposits },
@@ -1821,7 +1382,7 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
         };
         
         res.json({ 
-            stats,
+            stats: dashboardStats,
             recentActivities
         });
         
@@ -1837,18 +1398,110 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
     }
 });
 
-// Enhanced User Management
+// Enhanced User Management Routes
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const users = await User.find()
             .select('-password')
             .sort({ createdAt: -1 })
-            .limit(200); // Limit untuk performance
+            .limit(200);
         
         res.json({ users });
+        console.log(`✅ Admin users loaded: ${users.length} users`);
     } catch (error) {
         console.error('❌ Admin users error:', error);
         res.status(500).json({ error: 'Failed to load users' });
+    }
+});
+
+app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updateData = { ...req.body };
+        
+        // Remove sensitive fields
+        delete updateData.password;
+        
+        // Validate basic fields
+        if (updateData.name && updateData.name.trim().length < 2) {
+            return res.status(400).json({ error: 'Name must be at least 2 characters long' });
+        }
+        
+        if (updateData.balance !== undefined) {
+            const balance = parseFloat(updateData.balance);
+            if (isNaN(balance) || balance < 0) {
+                return res.status(400).json({ error: 'Balance must be a valid positive number' });
+            }
+            updateData.balance = balance;
+        }
+        
+        // Enhanced admin settings validation
+        if (updateData.adminSettings) {
+            const { profitPercentage, forceWinRate, profitCollapse, forceWin } = updateData.adminSettings;
+            
+            if (profitPercentage !== undefined) {
+                const percentage = parseInt(profitPercentage);
+                if (isNaN(percentage) || percentage < 20 || percentage > 100) {
+                    return res.status(400).json({ error: 'Profit percentage must be between 20 and 100' });
+                }
+                updateData.adminSettings.profitPercentage = percentage;
+            }
+            
+            if (forceWinRate !== undefined) {
+                const winRate = parseFloat(forceWinRate);
+                if (isNaN(winRate) || winRate < 0 || winRate > 100) {
+                    return res.status(400).json({ error: 'Win rate must be between 0 and 100' });
+                }
+                updateData.adminSettings.forceWinRate = winRate;
+            }
+            
+            if (profitCollapse && !['normal', 'profit', 'collapse'].includes(profitCollapse)) {
+                return res.status(400).json({ error: 'Invalid profit collapse setting' });
+            }
+            
+            if (forceWin !== undefined) {
+                updateData.adminSettings.forceWin = Boolean(forceWin);
+            }
+        }
+        
+        // Clean undefined values
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] === undefined || updateData[key] === '') {
+                delete updateData[key];
+            }
+        });
+        
+        const user = await User.findByIdAndUpdate(
+            id,
+            updateData,
+            { 
+                new: true, 
+                runValidators: true,
+                omitUndefined: true 
+            }
+        ).select('-password');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_USER_UPDATE', `Updated user: ${user.name}`, req);
+        
+        res.json({ message: 'User updated successfully', user });
+        console.log(`✅ User updated by admin: ${user.name}`);
+        
+    } catch (error) {
+        console.error('❌ Admin user update error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({ 
+                error: 'Validation failed', 
+                details: validationErrors 
+            });
+        }
+        
+        res.status(500).json({ error: 'Failed to update user' });
     }
 });
 
@@ -1881,7 +1534,7 @@ app.put('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (req,
         const { id } = req.params;
         const { bankName, accountNumber, accountHolder } = req.body;
         
-        if (!bankName || !accountNumber || !accountHolder) {
+        if (!bankName?.trim() || !accountNumber?.trim() || !accountHolder?.trim()) {
             return res.status(400).json({ error: 'All bank data fields are required' });
         }
         
@@ -1938,7 +1591,7 @@ app.delete('/api/admin/user/:id/bank', authenticateToken, requireAdmin, async (r
     }
 });
 
-// Enhanced Password Change for Admin
+// Enhanced Password Management
 app.put('/api/admin/user/:id/password', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
@@ -1970,115 +1623,7 @@ app.put('/api/admin/user/:id/password', authenticateToken, requireAdmin, async (
     }
 });
 
-app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const updateData = req.body;
-        
-        console.log('Received update data:', updateData);
-        
-        // Enhanced validation
-        delete updateData.password; // Don't allow password updates through this endpoint
-        
-        // Validate basic fields
-        if (updateData.name && updateData.name.trim().length < 2) {
-            return res.status(400).json({ error: 'Name must be at least 2 characters long' });
-        }
-        
-        if (updateData.balance !== undefined) {
-            const balance = parseFloat(updateData.balance);
-            if (isNaN(balance) || balance < 0) {
-                return res.status(400).json({ error: 'Balance must be a valid positive number' });
-            }
-            updateData.balance = balance;
-        }
-        
-        // Validate admin settings dengan enhanced checks
-        if (updateData.adminSettings) {
-            const { profitPercentage, forceWinRate, profitCollapse, forceWin } = updateData.adminSettings;
-            
-            // Validate profit percentage
-            if (profitPercentage !== undefined) {
-                const percentage = parseInt(profitPercentage);
-                if (isNaN(percentage) || percentage < 20 || percentage > 100) {
-                    return res.status(400).json({ error: 'Profit percentage must be between 20 and 100' });
-                }
-                updateData.adminSettings.profitPercentage = percentage;
-            }
-            
-            // Validate win rate
-            if (forceWinRate !== undefined) {
-                const winRate = parseFloat(forceWinRate);
-                if (isNaN(winRate) || winRate < 0 || winRate > 100) {
-                    return res.status(400).json({ error: 'Win rate must be between 0 and 100' });
-                }
-                updateData.adminSettings.forceWinRate = winRate;
-            }
-            
-            // Validate profit collapse setting
-            if (profitCollapse && !['normal', 'profit', 'collapse'].includes(profitCollapse)) {
-                return res.status(400).json({ error: 'Invalid profit collapse setting' });
-            }
-            
-            // Ensure forceWin is boolean
-            if (forceWin !== undefined) {
-                updateData.adminSettings.forceWin = Boolean(forceWin);
-            }
-        }
-        
-        // Clean up undefined/empty values
-        Object.keys(updateData).forEach(key => {
-            if (updateData[key] === undefined || updateData[key] === '') {
-                delete updateData[key];
-            }
-        });
-        
-        console.log('Processed update data:', updateData);
-        
-        const user = await User.findByIdAndUpdate(
-            id,
-            updateData,
-            { 
-                new: true, 
-                runValidators: true,
-                omitUndefined: true 
-            }
-        ).select('-password');
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        await logActivity(req.userId, 'ADMIN_USER_UPDATE', `Updated user: ${user.name} (${user.email || user.phone})`, req);
-        
-        res.json({ message: 'User updated successfully', user });
-        
-        console.log(`✅ User updated by admin: ${user.name}`);
-        
-    } catch (error) {
-        console.error('❌ Admin user update error:', error);
-        
-        // Send more specific error messages
-        if (error.name === 'ValidationError') {
-            const validationErrors = Object.values(error.errors).map(err => err.message);
-            return res.status(400).json({ 
-                error: 'Validation failed', 
-                details: validationErrors 
-            });
-        }
-        
-        if (error.name === 'CastError') {
-            return res.status(400).json({ error: 'Invalid data format' });
-        }
-        
-        res.status(500).json({ 
-            error: 'Failed to update user',
-            message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-        });
-    }
-});
-
-// Enhanced Trade Management
+// Enhanced Trade Management Routes
 app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { status, limit = 100 } = req.query;
@@ -2094,6 +1639,7 @@ app.get('/api/admin/trades', authenticateToken, requireAdmin, async (req, res) =
             .limit(Math.min(parseInt(limit), 200));
         
         res.json({ trades });
+        console.log(`✅ Admin trades loaded: ${trades.length} trades`);
     } catch (error) {
         console.error('❌ Admin trades error:', error);
         res.status(500).json({ error: 'Failed to load trades' });
@@ -2124,7 +1670,6 @@ app.put('/api/admin/trade/:id', authenticateToken, requireAdmin, async (req, res
         await logActivity(req.userId, 'ADMIN_TRADE_CONTROL', `Controlled trade: ${trade._id} - ${forceResult || 'cleared'} for user ${trade.userId.name}`, req);
         
         res.json({ message: 'Trade control updated successfully' });
-        
         console.log(`✅ Trade controlled by admin: ${trade._id} - ${forceResult || 'cleared'}`);
         
     } catch (error) {
@@ -2133,43 +1678,29 @@ app.put('/api/admin/trade/:id', authenticateToken, requireAdmin, async (req, res
     }
 });
 
-// ========================================
-// ENHANCED DEPOSIT MANAGEMENT ROUTES
-// ========================================
-
-// Enhanced Deposit Management dengan timeout dan error handling
+// Enhanced Deposit Management Routes  
 app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res) => {
     const startTime = Date.now();
     
     try {
-        console.log('📊 Loading admin deposits...');
-        
-        const { status, limit = 50 } = req.query; // Kurangi default limit
-        
-        // Tambahkan timeout untuk query
-        const queryTimeout = 15000; // 15 detik timeout
+        const { status, limit = 50 } = req.query;
+        const queryTimeout = 15000; // 15 second timeout
         
         let query = {};
         if (status && ['pending', 'approved', 'rejected'].includes(status)) {
             query.status = status;
         }
         
-        console.log('🔍 Deposit query:', query);
-        
-        // Query dengan timeout dan pagination yang lebih efisien
         const deposits = await Promise.race([
             Deposit.find(query)
                 .populate({
                     path: 'userId',
                     select: 'name email phone',
-                    options: { 
-                        timeout: queryTimeout / 2,
-                        lean: true // Optimasi memory
-                    }
+                    options: { lean: true }
                 })
                 .sort({ createdAt: -1 })
                 .limit(Math.min(parseInt(limit), 100))
-                .lean() // Optimasi memory
+                .lean()
                 .exec(),
             new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('Query timeout')), queryTimeout)
@@ -2177,57 +1708,44 @@ app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res)
         ]);
         
         const endTime = Date.now();
-        console.log(`✅ Deposits loaded: ${deposits.length} records in ${endTime - startTime}ms`);
+        const queryTime = endTime - startTime;
         
-        // Filter data yang bermasalah
-        const cleanDeposits = deposits.filter(deposit => {
-            return deposit && deposit._id && deposit.amount;
-        });
+        // Filter valid deposits
+        const cleanDeposits = deposits.filter(deposit => 
+            deposit && deposit._id && deposit.amount
+        );
         
         res.json({ 
             deposits: cleanDeposits,
             count: cleanDeposits.length,
-            queryTime: endTime - startTime,
+            queryTime: queryTime,
             status: 'success'
         });
+        
+        console.log(`✅ Deposits loaded: ${cleanDeposits.length} records in ${queryTime}ms`);
         
     } catch (error) {
         const endTime = Date.now();
         console.error('❌ Admin deposits error:', error);
-        console.error('⏱️ Query time before error:', endTime - startTime + 'ms');
         
-        // Log detail error untuk debugging
-        if (error.message === 'Query timeout') {
-            console.error('🕐 Database query timeout - consider optimizing or increasing timeout');
-        } else if (error.name === 'MongoError') {
-            console.error('🗃️ MongoDB error:', error.message);
-        }
-        
-        // Return error dengan detail untuk debugging (production harus dihapus)
         res.status(500).json({ 
             error: 'Failed to load deposits',
-            message: process.env.NODE_ENV === 'development' ? error.message : 'Database error',
             queryTime: endTime - startTime,
             status: 'error'
         });
     }
 });
 
-// Enhanced deposit processing dengan better error handling
 app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, res) => {
-    const startTime = Date.now();
-    
     try {
         const { id } = req.params;
         const { status, adminNotes } = req.body;
-        
-        console.log(`📝 Processing deposit ${id}:`, { status, adminNotes });
         
         if (!['pending', 'approved', 'rejected'].includes(status)) {
             return res.status(400).json({ error: 'Invalid status' });
         }
         
-        // Gunakan session untuk atomic operation
+        // Use session for atomic operation
         const session = await mongoose.startSession();
         
         try {
@@ -2249,7 +1767,7 @@ app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, r
             
             // Update deposit
             deposit.status = status;
-            deposit.adminNotes = adminNotes || '';
+            deposit.adminNotes = adminNotes?.trim() || '';
             deposit.processedAt = new Date();
             
             // If approved, add to user balance
@@ -2262,26 +1780,19 @@ app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, r
                 deposit.userId.balance += deposit.amount;
                 await deposit.userId.save({ session });
                 
-                console.log(`💰 Added ${deposit.amount} to user ${deposit.userId.name} balance`);
-                
-                // Notify via socket
+                // Send notification
                 setTimeout(() => {
-                    try {
-                        sendUserNotification(deposit.userId._id, 'depositApproved', {
-                            amount: deposit.amount,
-                            newBalance: deposit.userId.balance,
-                            message: 'Your deposit has been approved!'
-                        });
-                    } catch (socketError) {
-                        console.error('❌ Socket notification error:', socketError);
-                    }
+                    sendUserNotification(deposit.userId._id, 'depositApproved', {
+                        amount: deposit.amount,
+                        newBalance: deposit.userId.balance,
+                        message: 'Your deposit has been approved!'
+                    });
                 }, 100);
             }
             
             await deposit.save({ session });
             await session.commitTransaction();
             
-            // Enhanced activity logging
             await logActivity(
                 req.userId, 
                 'ADMIN_DEPOSIT_PROCESS', 
@@ -2289,19 +1800,16 @@ app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, r
                 req
             );
             
-            const endTime = Date.now();
-            console.log(`✅ Deposit ${status} successfully in ${endTime - startTime}ms`);
-            
             res.json({ 
                 message: `Deposit ${status} successfully`,
                 deposit: {
                     _id: deposit._id,
                     status: deposit.status,
                     processedAt: deposit.processedAt
-                },
-                queryTime: endTime - startTime,
-                status: 'success'
+                }
             });
+            
+            console.log(`✅ Deposit ${status} successfully: ${formatCurrency(deposit.amount)}`);
             
         } catch (transactionError) {
             await session.abortTransaction();
@@ -2311,52 +1819,267 @@ app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, r
         }
         
     } catch (error) {
-        const endTime = Date.now();
         console.error('❌ Admin deposit process error:', error);
-        console.error('⏱️ Process time before error:', endTime - startTime + 'ms');
-        
-        res.status(500).json({ 
-            error: 'Failed to process deposit',
-            message: process.env.NODE_ENV === 'development' ? error.message : 'Processing error',
-            queryTime: endTime - startTime,
-            status: 'error'
-        });
+        res.status(500).json({ error: 'Failed to process deposit' });
     }
 });
 
-// Enhanced Deposit Receipt Handling
-app.get('/api/admin/deposit/:id/receipt', authenticateToken, requireAdmin, async (req, res) => {
+// Enhanced Withdrawal Management Routes
+app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status, limit = 100 } = req.query;
+        
+        let query = {};
+        if (status && ['pending', 'approved', 'rejected', 'processed'].includes(status)) {
+            query.status = status;
+        }
+        
+        const withdrawals = await Withdrawal.find(query)
+            .populate('userId', 'name email phone')
+            .sort({ createdAt: -1 })
+            .limit(Math.min(parseInt(limit), 200));
+        
+        res.json({ withdrawals });
+        console.log(`✅ Withdrawals loaded: ${withdrawals.length} withdrawals`);
+    } catch (error) {
+        console.error('❌ Admin withdrawals error:', error);
+        res.status(500).json({ error: 'Failed to load withdrawals' });
+    }
+});
+
+app.put('/api/admin/withdrawal/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, adminNotes } = req.body;
+        
+        if (!['pending', 'approved', 'rejected', 'processed'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+        
+        const withdrawal = await Withdrawal.findById(id).populate('userId');
+        if (!withdrawal) {
+            return res.status(404).json({ error: 'Withdrawal not found' });
+        }
+        
+        const oldStatus = withdrawal.status;
+        withdrawal.status = status;
+        withdrawal.adminNotes = adminNotes?.trim() || '';
+        withdrawal.processedAt = new Date();
+        
+        // Use transaction for atomic operations
+        const session = await mongoose.startSession();
+        
+        try {
+            session.startTransaction();
+            
+            // If rejected, return money to user balance
+            if (status === 'rejected' && oldStatus === 'pending') {
+                withdrawal.userId.balance += withdrawal.amount;
+                await withdrawal.userId.save({ session });
+                
+                // Send notification
+                sendUserNotification(withdrawal.userId._id, 'withdrawalRejected', {
+                    amount: withdrawal.amount,
+                    newBalance: withdrawal.userId.balance,
+                    reason: adminNotes || 'Withdrawal request rejected',
+                    message: 'Your withdrawal request has been rejected and funds returned to your account.'
+                });
+            } else if (status === 'approved') {
+                sendUserNotification(withdrawal.userId._id, 'withdrawalApproved', {
+                    amount: withdrawal.finalAmount,
+                    message: 'Your withdrawal request has been approved and will be processed soon.',
+                    bankAccount: withdrawal.bankAccount
+                });
+            } else if (status === 'processed') {
+                sendUserNotification(withdrawal.userId._id, 'withdrawalProcessed', {
+                    amount: withdrawal.finalAmount,
+                    message: 'Your withdrawal has been processed successfully.',
+                    bankAccount: withdrawal.bankAccount
+                });
+            }
+            
+            await withdrawal.save({ session });
+            await session.commitTransaction();
+            
+            await logActivity(
+                req.userId, 
+                'ADMIN_WITHDRAWAL_PROCESS', 
+                `${status.toUpperCase()} withdrawal: ${formatCurrency(withdrawal.amount)} for ${withdrawal.userId.name}`, 
+                req
+            );
+            
+            res.json({ 
+                message: `Withdrawal ${status} successfully`,
+                withdrawal: {
+                    _id: withdrawal._id,
+                    status: withdrawal.status,
+                    processedAt: withdrawal.processedAt
+                }
+            });
+            
+            console.log(`✅ Withdrawal ${status}: ${formatCurrency(withdrawal.amount)} for ${withdrawal.userId.name}`);
+            
+        } catch (transactionError) {
+            await session.abortTransaction();
+            throw transactionError;
+        } finally {
+            session.endSession();
+        }
+        
+    } catch (error) {
+        console.error('❌ Admin withdrawal process error:', error);
+        res.status(500).json({ error: 'Failed to process withdrawal' });
+    }
+});
+
+// Enhanced Bank Account Management Routes
+app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const accounts = await BankAccount.find().sort({ createdAt: -1 });
+        res.json({ accounts });
+        console.log(`✅ Bank accounts loaded: ${accounts.length} accounts`);
+    } catch (error) {
+        console.error('❌ Admin bank accounts error:', error);
+        res.status(500).json({ error: 'Failed to load bank accounts' });
+    }
+});
+
+app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { bankName, accountNumber, accountHolder, note } = req.body;
+        
+        if (!bankName?.trim() || !accountNumber?.trim() || !accountHolder?.trim()) {
+            return res.status(400).json({ error: 'Bank name, account number, and account holder are required' });
+        }
+        
+        // Check for duplicate account
+        const existingAccount = await BankAccount.findOne({ 
+            bankName: bankName.trim(), 
+            accountNumber: accountNumber.trim() 
+        });
+        
+        if (existingAccount) {
+            return res.status(400).json({ error: 'Bank account already exists' });
+        }
+        
+        const account = new BankAccount({
+            bankName: bankName.trim(),
+            accountNumber: accountNumber.trim(),
+            accountHolder: accountHolder.trim(),
+            note: note?.trim() || ''
+        });
+        
+        await account.save();
+        
+        await logActivity(req.userId, 'ADMIN_BANK_CREATE', `Created bank account: ${bankName.trim()} - ${accountNumber.trim()}`, req);
+        
+        res.status(201).json({ 
+            message: 'Bank account created successfully',
+            account
+        });
+        
+        console.log(`✅ Bank account created: ${bankName.trim()} - ${accountNumber.trim()}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account create error:', error);
+        res.status(500).json({ error: 'Failed to create bank account' });
+    }
+});
+
+app.put('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { bankName, accountNumber, accountHolder, note, isActive } = req.body;
+        
+        if (!bankName?.trim() || !accountNumber?.trim() || !accountHolder?.trim()) {
+            return res.status(400).json({ error: 'Bank name, account number, and account holder are required' });
+        }
+        
+        const updateData = {
+            bankName: bankName.trim(),
+            accountNumber: accountNumber.trim(),
+            accountHolder: accountHolder.trim(),
+            note: note?.trim() || '',
+            isActive: Boolean(isActive)
+        };
+        
+        const account = await BankAccount.findByIdAndUpdate(
+            id,
+            updateData,
+            { new: true, runValidators: true }
+        );
+        
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_UPDATE', `Updated bank account: ${account.bankName}`, req);
+        
+        res.json({ 
+            message: 'Bank account updated successfully',
+            account
+        });
+        
+        console.log(`✅ Bank account updated: ${account.bankName}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account update error:', error);
+        res.status(500).json({ error: 'Failed to update bank account' });
+    }
+});
+
+app.patch('/api/admin/bank-accounts/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         
-        const deposit = await Deposit.findById(id).select('receipt fileName fileType');
-        if (!deposit) {
-            return res.status(404).json({ error: 'Deposit not found' });
+        const account = await BankAccount.findById(id);
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
         }
         
-        if (!deposit.receipt) {
-            return res.status(404).json({ error: 'Receipt not found' });
-        }
+        account.isActive = !account.isActive;
+        await account.save();
         
-        // Return receipt data
-        res.json({
-            receipt: deposit.receipt,
-            fileName: deposit.fileName || 'payment_proof',
-            fileType: deposit.fileType || 'image/jpeg'
+        await logActivity(req.userId, 'ADMIN_BANK_TOGGLE', `${account.isActive ? 'Activated' : 'Deactivated'} bank account: ${account.bankName}`, req);
+        
+        res.json({ 
+            message: `Bank account ${account.isActive ? 'activated' : 'deactivated'} successfully`,
+            account
         });
         
+        console.log(`✅ Bank account ${account.isActive ? 'activated' : 'deactivated'}: ${account.bankName}`);
+        
     } catch (error) {
-        console.error('❌ Error loading receipt:', error);
-        res.status(500).json({ error: 'Failed to load receipt' });
+        console.error('❌ Admin bank account toggle error:', error);
+        res.status(500).json({ error: 'Failed to toggle bank account' });
     }
 });
 
-// Enhanced Health Check untuk Admin
+app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const account = await BankAccount.findByIdAndDelete(id);
+        if (!account) {
+            return res.status(404).json({ error: 'Bank account not found' });
+        }
+        
+        await logActivity(req.userId, 'ADMIN_BANK_DELETE', `Deleted bank account: ${account.bankName}`, req);
+        
+        res.json({ message: 'Bank account deleted successfully' });
+        
+        console.log(`✅ Bank account deleted: ${account.bankName}`);
+        
+    } catch (error) {
+        console.error('❌ Admin bank account delete error:', error);
+        res.status(500).json({ error: 'Failed to delete bank account' });
+    }
+});
+
+// Enhanced Health Check for Database
 app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const startTime = Date.now();
-        
-        // Test multiple collections dengan timeout
         const timeout = 8000; // 8 seconds
         
         const [userCount, depositCount, tradeCount, bankCount] = await Promise.race([
@@ -2374,7 +2097,6 @@ app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (re
         const endTime = Date.now();
         const queryTime = endTime - startTime;
         
-        // Test connection quality
         let status = 'healthy';
         let warning = null;
         
@@ -2399,8 +2121,7 @@ app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (re
                 readyState: mongoose.connection.readyState,
                 readyStateText: ['disconnected', 'connected', 'connecting', 'disconnecting'][mongoose.connection.readyState],
                 host: mongoose.connection.host,
-                name: mongoose.connection.name,
-                serverVersion: mongoose.connection.db?.serverConfig?.s?.server?.serverDetails?.version
+                name: mongoose.connection.name
             },
             server: {
                 uptime: process.uptime(),
@@ -2429,280 +2150,100 @@ app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (re
     }
 });
 
-// Enhanced Withdrawal Management dengan Notifications
-app.get('/api/admin/withdrawals', authenticateToken, requireAdmin, async (req, res) => {
+// Enhanced Chart Data Route
+app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
     try {
-        const { status, limit = 100 } = req.query;
+        const { symbol, timeframe } = req.params;
         
-        let query = {};
-        if (status && ['pending', 'approved', 'rejected', 'processed'].includes(status)) {
-            query.status = status;
+        // Validation
+        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+        if (!validTimeframes.includes(timeframe)) {
+            return res.status(400).json({ 
+                error: 'Invalid timeframe',
+                validTimeframes: validTimeframes
+            });
         }
         
-        const withdrawals = await Withdrawal.find(query)
-            .populate('userId', 'name email phone')
-            .sort({ createdAt: -1 })
-            .limit(Math.min(parseInt(limit), 200));
-        
-        res.json({ withdrawals });
-    } catch (error) {
-        console.error('❌ Admin withdrawals error:', error);
-        res.status(500).json({ error: 'Failed to load withdrawals' });
-    }
-});
-
-// Enhanced Withdrawal Processing dengan Notifications
-app.put('/api/admin/withdrawal/:id', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { status, adminNotes } = req.body;
-        
-        if (!['pending', 'approved', 'rejected', 'processed'].includes(status)) {
-            return res.status(400).json({ error: 'Invalid status' });
+        // Check if symbol exists
+        const priceData = await Price.findOne({ symbol: symbol.toUpperCase() });
+        if (!priceData) {
+            const availableSymbols = await Price.find().distinct('symbol');
+            return res.status(404).json({ 
+                error: 'Symbol not found',
+                availableSymbols: availableSymbols
+            });
         }
         
-        const withdrawal = await Withdrawal.findById(id).populate('userId');
-        if (!withdrawal) {
-            return res.status(404).json({ error: 'Withdrawal not found' });
-        }
-        
-        const oldStatus = withdrawal.status;
-        withdrawal.status = status;
-        withdrawal.adminNotes = adminNotes || '';
-        withdrawal.processedAt = new Date();
-        
-        // Use transaction untuk atomic operations
-        const session = await mongoose.startSession();
-        
-        try {
-            session.startTransaction();
+        // Generate historical data
+        const generateHistoricalData = (count = 100) => {
+            const data = [];
+            const now = Date.now();
+            let price = priceData.price;
             
-            // If rejected, return money to user balance
-            if (status === 'rejected' && oldStatus === 'pending') {
-                withdrawal.userId.balance += withdrawal.amount;
-                await withdrawal.userId.save({ session });
+            for (let i = count; i >= 0; i--) {
+                const time = Math.floor((now - (i * 60000)) / 1000);
+                const volatility = 0.01;
+                const changePercent = (Math.random() - 0.5) * volatility;
+                const newPrice = Math.max(0.001, price * (1 + changePercent));
                 
-                // Send notification
-                sendUserNotification(withdrawal.userId._id, 'withdrawalRejected', {
-                    amount: withdrawal.amount,
-                    newBalance: withdrawal.userId.balance,
-                    reason: adminNotes || 'Withdrawal request rejected',
-                    message: 'Your withdrawal request has been rejected and funds returned to your account.'
+                const open = price;
+                const close = newPrice;
+                const spread = Math.abs(close - open);
+                const high = Math.max(open, close) + (spread * Math.random() * 0.5);
+                const low = Math.min(open, close) - (spread * Math.random() * 0.5);
+                const volume = Math.floor(Math.random() * 1000000) + 100000;
+                
+                data.push({
+                    time,
+                    open: parseFloat(Math.max(0.001, open).toFixed(8)),
+                    high: parseFloat(Math.max(0.001, high).toFixed(8)),
+                    low: parseFloat(Math.max(0.001, low).toFixed(8)),
+                    close: parseFloat(Math.max(0.001, close).toFixed(8)),
+                    volume
                 });
-            } else if (status === 'approved') {
-                // Send notification
-                sendUserNotification(withdrawal.userId._id, 'withdrawalApproved', {
-                    amount: withdrawal.finalAmount,
-                    message: 'Your withdrawal request has been approved and will be processed soon.',
-                    bankAccount: withdrawal.bankAccount
-                });
-            } else if (status === 'processed') {
-                // Send notification
-                sendUserNotification(withdrawal.userId._id, 'withdrawalProcessed', {
-                    amount: withdrawal.finalAmount,
-                    message: 'Your withdrawal has been processed successfully.',
-                    bankAccount: withdrawal.bankAccount
-                });
+                
+                price = newPrice;
             }
             
-            await withdrawal.save({ session });
-            await session.commitTransaction();
-            
-            await logActivity(
-                req.userId, 
-                'ADMIN_WITHDRAWAL_PROCESS', 
-                `${status.toUpperCase()} withdrawal: ${formatCurrency(withdrawal.amount)} for ${withdrawal.userId.name}`, 
-                req
-            );
-            
-            res.json({ 
-                message: `Withdrawal ${status} successfully`,
-                withdrawal: {
-                    _id: withdrawal._id,
-                    status: withdrawal.status,
-                    processedAt: withdrawal.processedAt
-                }
-            });
-            
-            console.log(`✅ Withdrawal ${status} by admin: ${formatCurrency(withdrawal.amount)} for ${withdrawal.userId.name}`);
-            
-        } catch (transactionError) {
-            await session.abortTransaction();
-            throw transactionError;
-        } finally {
-            session.endSession();
-        }
-        
-    } catch (error) {
-        console.error('❌ Admin withdrawal process error:', error);
-        res.status(500).json({ error: 'Failed to process withdrawal' });
-    }
-});
-
-// Enhanced Bank Account Management
-app.get('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const accounts = await BankAccount.find().sort({ createdAt: -1 });
-        res.json({ accounts });
-    } catch (error) {
-        console.error('❌ Admin bank accounts error:', error);
-        res.status(500).json({ error: 'Failed to load bank accounts' });
-    }
-});
-
-app.post('/api/admin/bank-accounts', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { bankName, accountNumber, accountHolder, note } = req.body;
-        
-        if (!bankName || !accountNumber || !accountHolder) {
-            return res.status(400).json({ error: 'Bank name, account number, and account holder are required' });
-        }
-        
-        // Check untuk duplicate account
-        const existingAccount = await BankAccount.findOne({ 
-            bankName: bankName.trim(), 
-            accountNumber: accountNumber.trim() 
-        });
-        
-        if (existingAccount) {
-            return res.status(400).json({ error: 'Bank account already exists' });
-        }
-        
-        const account = new BankAccount({
-            bankName: bankName.trim(),
-            accountNumber: accountNumber.trim(),
-            accountHolder: accountHolder.trim(),
-            note: note ? note.trim() : ''
-        });
-        
-        await account.save();
-        
-        await logActivity(req.userId, 'ADMIN_BANK_CREATE', `Created bank account: ${bankName} - ${accountNumber}`, req);
-        
-        res.status(201).json({ 
-            message: 'Bank account created successfully',
-            account
-        });
-        
-        console.log(`✅ Bank account created by admin: ${bankName} - ${accountNumber}`);
-        
-    } catch (error) {
-        console.error('❌ Admin bank account create error:', error);
-        res.status(500).json({ error: 'Failed to create bank account' });
-    }
-});
-
-app.put('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { bankName, accountNumber, accountHolder, note, isActive } = req.body;
-        
-        if (!bankName || !accountNumber || !accountHolder) {
-            return res.status(400).json({ error: 'Bank name, account number, and account holder are required' });
-        }
-        
-        const updateData = {
-            bankName: bankName.trim(),
-            accountNumber: accountNumber.trim(),
-            accountHolder: accountHolder.trim(),
-            note: note ? note.trim() : '',
-            isActive: Boolean(isActive)
+            return data.sort((a, b) => a.time - b.time);
         };
         
-        const account = await BankAccount.findByIdAndUpdate(
-            id,
-            updateData,
-            { new: true, runValidators: true }
-        );
+        const chartData = generateHistoricalData(100);
         
-        if (!account) {
-            return res.status(404).json({ error: 'Bank account not found' });
-        }
-        
-        await logActivity(req.userId, 'ADMIN_BANK_UPDATE', `Updated bank account: ${account.bankName}`, req);
-        
-        res.json({ 
-            message: 'Bank account updated successfully',
-            account
+        res.json({
+            symbol: symbol.toUpperCase(),
+            timeframe,
+            candlestick: chartData,
+            count: chartData.length,
+            currentPrice: priceData.price,
+            lastUpdate: priceData.lastUpdate
         });
         
-        console.log(`✅ Bank account updated by admin: ${account.bankName}`);
+        console.log(`✅ Chart data sent: ${chartData.length} candles for ${symbol}/${timeframe}`);
         
     } catch (error) {
-        console.error('❌ Admin bank account update error:', error);
-        res.status(500).json({ error: 'Failed to update bank account' });
-    }
-});
-
-app.patch('/api/admin/bank-accounts/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        
-        const account = await BankAccount.findById(id);
-        if (!account) {
-            return res.status(404).json({ error: 'Bank account not found' });
-        }
-        
-        account.isActive = !account.isActive;
-        await account.save();
-        
-        await logActivity(req.userId, 'ADMIN_BANK_TOGGLE', `${account.isActive ? 'Activated' : 'Deactivated'} bank account: ${account.bankName}`, req);
-        
-        res.json({ 
-            message: `Bank account ${account.isActive ? 'activated' : 'deactivated'} successfully`,
-            account
-        });
-        
-        console.log(`✅ Bank account ${account.isActive ? 'activated' : 'deactivated'} by admin: ${account.bankName}`);
-        
-    } catch (error) {
-        console.error('❌ Admin bank account toggle error:', error);
-        res.status(500).json({ error: 'Failed to toggle bank account' });
-    }
-});
-
-app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        
-        const account = await BankAccount.findByIdAndDelete(id);
-        if (!account) {
-            return res.status(404).json({ error: 'Bank account not found' });
-        }
-        
-        await logActivity(req.userId, 'ADMIN_BANK_DELETE', `Deleted bank account: ${account.bankName}`, req);
-        
-        res.json({ message: 'Bank account deleted successfully' });
-        
-        console.log(`✅ Bank account deleted by admin: ${account.bankName}`);
-        
-    } catch (error) {
-        console.error('❌ Admin bank account delete error:', error);
-        res.status(500).json({ error: 'Failed to delete bank account' });
+        console.error('❌ Chart data error:', error);
+        res.status(500).json({ error: 'Failed to load chart data' });
     }
 });
 
 // ========================================
-// ENHANCED SOCKET.IO HANDLING
+// 🔌 ENHANCED SOCKET.IO
 // ========================================
 
 io.on('connection', (socket) => {
     console.log('👤 User connected:', socket.id);
     
-    // Enhanced user join dengan validation
     socket.on('join', (userId) => {
-        if (userId && typeof userId === 'string' && userId.length === 24) { // MongoDB ObjectId length
+        if (userId && typeof userId === 'string' && userId.length === 24) {
             socket.join(userId);
-            socket.userId = userId; // Store untuk cleanup
+            socket.userId = userId;
             console.log(`👤 User ${userId} joined room`);
             
-            // Send welcome message
             socket.emit('connected', { 
                 message: 'Connected to TradeStation',
                 timestamp: new Date().toISOString()
             });
-        } else {
-            console.warn('❌ Invalid userId in join:', userId);
         }
     });
     
@@ -2710,59 +2251,15 @@ io.on('connection', (socket) => {
         socket.join('price_updates');
         console.log('📊 User subscribed to price updates');
         
-        // Send current prices immediately
         Price.find().then(prices => {
-            if (prices && prices.length > 0) {
+            if (prices?.length > 0) {
                 socket.emit('pricesSnapshot', prices);
             }
         }).catch(err => console.error('Error sending price snapshot:', err));
     });
     
-    socket.on('subscribe_charts', (data) => {
-        try {
-            const { symbol, timeframe } = data || {};
-            if (symbol && timeframe) {
-                const roomName = `chart_${symbol}_${timeframe}`;
-                socket.join(roomName);
-                console.log(`📊 User subscribed to chart: ${symbol}/${timeframe}`);
-                
-                // Send current chart data jika ada
-                const key = `${symbol}-${timeframe}`;
-                const chartData = chartDataStore.get(key);
-                if (chartData && chartData.length > 0) {
-                    const recentCandles = chartData.slice(-50); // Send last 50 candles
-                    socket.emit('chartSnapshot', {
-                        symbol,
-                        timeframe,
-                        candles: recentCandles
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('❌ Error in chart subscription:', error);
-        }
-    });
-    
-    socket.on('unsubscribe_charts', (data) => {
-        try {
-            const { symbol, timeframe } = data || {};
-            if (symbol && timeframe) {
-                socket.leave(`chart_${symbol}_${timeframe}`);
-                console.log(`📊 User unsubscribed from chart: ${symbol}/${timeframe}`);
-            }
-        } catch (error) {
-            console.error('❌ Error in chart unsubscription:', error);
-        }
-    });
-    
-    // Enhanced ping/pong untuk connection health
-    socket.on('ping', () => {
-        socket.emit('pong', { timestamp: Date.now() });
-    });
-    
     socket.on('disconnect', (reason) => {
         console.log('👤 User disconnected:', socket.id, 'Reason:', reason);
-        // Cleanup akan di-handle otomatis oleh socket.io
     });
     
     socket.on('error', (error) => {
@@ -2770,39 +2267,15 @@ io.on('connection', (socket) => {
     });
 });
 
-// Enhanced price broadcasting
-setInterval(() => {
-    if (isInitialized) {
-        io.to('price_updates').emit('priceHeartbeat', {
-            timestamp: Date.now(),
-            message: 'Price updates active'
-        });
-    }
-}, 30000); // Every 30 seconds
-
 // ========================================
-// ENHANCED ERROR HANDLING
+// 🚨 ERROR HANDLING
 // ========================================
 
-// Enhanced global error handler dengan better responses
 app.use((error, req, res, next) => {
     console.error('❌ Global error:', error);
     
-    // Log error details untuk debugging
-    console.error('Error details:', {
-        message: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : 'Hidden in production',
-        url: req.url,
-        method: req.method,
-        ip: req.ip,
-        userAgent: req.get('User-Agent'),
-        timestamp: new Date().toISOString()
-    });
-    
-    // Don't leak error details in production
     const isDevelopment = process.env.NODE_ENV === 'development';
     
-    // Determine error type dan appropriate response
     let statusCode = error.status || 500;
     let message = 'Internal server error';
     
@@ -2815,9 +2288,6 @@ app.use((error, req, res, next) => {
     } else if (error.code === 11000) {
         statusCode = 400;
         message = 'Duplicate data detected';
-    } else if (error.message.includes('CORS')) {
-        statusCode = 403;
-        message = 'CORS: Origin not allowed';
     } else if (isDevelopment) {
         message = error.message;
     }
@@ -2826,57 +2296,29 @@ app.use((error, req, res, next) => {
         error: message,
         timestamp: new Date().toISOString(),
         ...(isDevelopment && { 
-            details: error.message,
-            stack: error.stack 
+            details: error.message 
         })
     });
 });
 
-// Enhanced 404 handler
 app.use('*', (req, res) => {
-    console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
-    console.log('Available routes: /api/health, /api/login, /api/register, /api/admin/*, etc.');
-    
     res.status(404).json({ 
         error: 'Route not found',
         method: req.method,
         path: req.originalUrl,
-        timestamp: new Date().toISOString(),
-        suggestion: 'Check API documentation for available endpoints'
+        timestamp: new Date().toISOString()
     });
 });
 
 // ========================================
-// GRACEFUL SHUTDOWN
-// ========================================
-
-process.on('SIGTERM', () => {
-    console.log('💤 SIGTERM received, shutting down gracefully');
-    server.close(() => {
-        console.log('✅ Process terminated');
-        mongoose.connection.close();
-        process.exit(0);
-    });
-});
-
-process.on('SIGINT', () => {
-    console.log('💤 SIGINT received, shutting down gracefully');
-    server.close(() => {
-        console.log('✅ Process terminated');
-        mongoose.connection.close();
-        process.exit(0);
-    });
-});
-
-// ========================================
-// SERVER START - ENHANCED
+// 🚀 SERVER STARTUP
 // ========================================
 
 const PORT = process.env.PORT || 3000;
 
 async function startServer() {
     try {
-        // Connect to database first
+        // Connect to database
         await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
@@ -2889,14 +2331,7 @@ async function startServer() {
         
         console.log('✅ Connected to MongoDB');
         
-        // Call after database connection
-        if (mongoose.connection.readyState === 1) {
-            ensureIndexes();
-        } else {
-            mongoose.connection.once('connected', ensureIndexes);
-        }
-        
-        // Initialize default admin user
+        // Initialize default admin
         const adminExists = await User.findOne({ email: 'admin@tradestation.com' });
         if (!adminExists) {
             const hashedPassword = await bcrypt.hash('admin123', 12);
@@ -2906,28 +2341,13 @@ async function startServer() {
                 password: hashedPassword,
                 balance: 0,
                 accountType: 'premium',
-                referralCode: 'ADMIN001',
-                adminSettings: {
-                    profitCollapse: 'normal',
-                    profitPercentage: 80,
-                    forceWin: false,
-                    forceWinRate: 0
-                },
-                stats: {
-                    totalTrades: 0,
-                    winTrades: 0,
-                    loseTrades: 0
-                }
+                referralCode: 'ADMIN001'
             });
             await admin.save();
             console.log('✅ Default admin user created (admin@tradestation.com / admin123)');
-            console.log('✅ Admin settings:', admin.adminSettings);
-        } else {
-            console.log('✅ Admin user already exists');
-            console.log('✅ Admin settings:', adminExists.adminSettings);
         }
         
-        // Initialize sample bank accounts
+        // Initialize sample data
         const bankExists = await BankAccount.findOne();
         if (!bankExists) {
             const sampleBanks = [
@@ -2935,22 +2355,13 @@ async function startServer() {
                     bankName: 'Bank BCA',
                     accountNumber: '1234567890',
                     accountHolder: 'TradeStation Official',
-                    note: 'Primary deposit account',
-                    isActive: true
+                    note: 'Primary deposit account'
                 },
                 {
                     bankName: 'Bank Mandiri',
                     accountNumber: '0987654321',
                     accountHolder: 'TradeStation Official',
-                    note: 'Secondary deposit account',
-                    isActive: true
-                },
-                {
-                    bankName: 'Bank BRI',
-                    accountNumber: '5555666677',
-                    accountHolder: 'TradeStation Official',
-                    note: 'Alternative deposit account',
-                    isActive: true
+                    note: 'Secondary deposit account'
                 }
             ];
             
@@ -2962,17 +2373,6 @@ async function startServer() {
         
         // Initialize prices
         await initializePrices();
-        console.log('✅ Prices initialized');
-        
-        // Initialize chart data untuk semua symbols
-        console.log('📊 Initializing chart data for all symbols...');
-        const symbols = await Price.find();
-        
-        for (const symbol of symbols) {
-            await initializeChartDataForSymbol(symbol.symbol);
-        }
-        
-        console.log(`✅ Chart data initialized for ${symbols.length} symbols, total datasets: ${chartDataStore.size}`);
         
         // Mark as initialized
         isInitialized = true;
@@ -2985,55 +2385,41 @@ async function startServer() {
         // Start server
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`
-🚀 TradeStation Backend Server Started Successfully! - VERSI SEMPURNA 4.0.0
+🚀 TradeStation Backend - Enhanced Perfect Version 5.0.0
 📍 Port: ${PORT}
 🌍 Environment: ${process.env.NODE_ENV || 'development'}
-📧 Enhanced Email/Phone Authentication: ✅ (Terbaik dari kedua sistem)
-📱 Robust Admin Panel: ✅ (Dengan Timeout Protection & Optimization)
-🛡️  CORS Protection: ✅ (Dynamic untuk semua environment)
-📊 Real-time Chart Data: ✅ Enhanced WebSocket
-💳 Bank Management: ✅ Enabled dengan Receipt Support
-🎯 Trading Control: ✅ Advanced dengan Admin Settings
-💰 Profit Settings: ✅ Dynamic per User
-⚙️  Admin Panel: ✅ Complete dengan Real-time Notifications
-🔄 Background Processes: ✅ Running dengan Performance Monitoring
-🗃️  Database: ✅ Connected dengan Health Monitoring
-📡 Socket.IO: ✅ Ready dengan Enhanced Connection Management
+📧 Enhanced Authentication: ✅ Email/Phone Registration Perfect
+🛡️  CORS Protection: ✅ Optimized for All Environments  
+📊 Real-time Trading: ✅ Enhanced Performance
+💳 Deposit/Withdrawal: ✅ Robust File Upload Support
+🎯 Admin Panel: ✅ Optimized Query Performance
+🔄 Background Processes: ✅ Enhanced Error Handling
+🗃️  Database: ✅ Connected with Health Monitoring
+📡 Socket.IO: ✅ Enhanced Connection Management
 ⏰ Timestamp: ${new Date().toISOString()}
 
-🔗 API Endpoints:
-   • Health Check: GET /api/health
-   • Database Health: GET /api/admin/health/database
-   • Authentication: POST /api/login, /api/register (Enhanced)
-   • Trading: POST /api/trade, GET /api/trades
-   • Charts: GET /api/chart/:symbol/:timeframe
-   • Admin Panel: /api/admin/* (Enhanced dengan Timeouts)
-   • Bank Management: /api/admin/bank-accounts/*
-   • User Management: /api/admin/user/:id/*
+🔗 API Endpoints Ready:
+   • Health: GET /api/health
+   • Auth: POST /api/login, /api/register (Enhanced)
+   • Trading: POST /api/trade, GET /api/trades  
+   • Admin: /api/admin/* (Optimized)
 
-📋 Admin Credentials:
+📋 Admin Access:
    • Email: admin@tradestation.com
    • Password: admin123
 
-✨ FITUR SEMPURNA GABUNGAN:
-   ✅ Enhanced Registration System (Email/Phone Validation)
-   ✅ Robust Admin Deposit Management (Timeout Protection)
-   ✅ Database Optimization & Monitoring
-   ✅ Memory Usage Tracking
-   ✅ Query Timeout Handling untuk High Load
-   ✅ Better Error Handling untuk Production
-   ✅ Indonesian Phone Number Validation
+✨ ENHANCED FEATURES:
+   ✅ Optimized Registration System (Email/Phone Perfect)
+   ✅ Enhanced Database Performance & Validation
+   ✅ Robust Error Handling & Security
+   ✅ Memory Usage Optimization
+   ✅ Query Timeout Protection
    ✅ Transaction Atomic Operations
-   ✅ Performance Optimization untuk Many Users
-   ✅ Enhanced CORS untuk All Environments
+   ✅ Enhanced CORS for Production
    ✅ Real-time Notifications via WebSocket
-   ✅ Receipt Management untuk Deposits
-   ✅ Bank Data Management per User
-   ✅ Password Change via Admin Panel
-   ✅ Enhanced Socket Connection Management
-   ✅ Better Response Format & Error Messages
+   ✅ Improved Code Structure & Maintainability
 
-🎯 Server siap melayani trading dengan performa optimal dan keamanan maksimal!
+🎯 Server ready for high-performance trading!
             `);
         });
         
@@ -3043,14 +2429,24 @@ async function startServer() {
     }
 }
 
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('💤 SIGTERM received, shutting down gracefully');
+    server.close(() => {
+        mongoose.connection.close();
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('💤 SIGINT received, shutting down gracefully');
+    server.close(() => {
+        mongoose.connection.close();
+        process.exit(0);
+    });
+});
+
 // Start the server
 startServer();
-
-console.log('🔧 TradeStation Backend - Versi Sempurna Terbaru Loaded!');
-console.log('🌐 Allowed CORS Origins:', allowedOrigins.length);
-console.log('📡 Socket.IO enhanced dengan better error handling');
-console.log('🔒 Enhanced authentication dan authorization');
-console.log('📊 Database health monitoring improved');
-console.log('🔔 Real-time notifications enhanced');
 
 module.exports = app;
