@@ -3520,78 +3520,77 @@ async function startServer() {
         
         // ✅ START HTTP SERVER
         server.listen(PORT, '0.0.0.0', () => {
-            console.log(`
-🎉 ================================================================
-🚀 TradeStation Backend Server - FIXED & OPTIMIZED v4.0.0
-================================================================
-📍 Server Details:
-   • Port: ${PORT}
-   • Environment: ${process.env.NODE_ENV || 'development'}
-   • Node.js: ${process.version}
-   • MongoDB: Connected & Optimized
-   • Memory Usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB
-
-✅ Fixed Issues:
-   🔧 Admin Panel: ALL PROBLEMS FIXED
-   🔧 Database Queries: SUPER OPTIMIZED & FAST
-   🔧 Null Value Handling: ENHANCED SAFETY
-   🔧 Search Functions: WORKING PERFECTLY
-   🔧 API Endpoints: ALL COMPLETE & TESTED
-   🔧 Mobile Responsive: READY TO GO
-   🔧 Error Handling: COMPREHENSIVE
-
-🎯 Admin Panel Features:
-   ✅ User Management: Enhanced with search & pagination
-   ✅ Bank Data Management: Full CRUD operations
-   ✅ Deposit Management: Fast loading & processing
-   ✅ Withdrawal Management: Complete & safe
-   ✅ Trade Management: Real-time monitoring
-   ✅ Mobile Responsive: Works on all devices
-
-🔗 API Endpoints:
-   • Health Check: GET /api/health
-   • Admin Debug: GET /api/admin/debug/user
-   • Admin Reset: POST /api/admin/debug/reset
-   • User Registration: POST /api/register
-   • User Login: POST /api/login
-   • Trading: POST /api/trade
-   • Admin Dashboard: /api/admin/*
-
-📱 Features Ready:
-   ✅ Real-time Price Updates
-   ✅ Chart Data Generation
-   ✅ Trade Processing
-   ✅ Deposit/Withdrawal Management
-   ✅ Bank Account Management
-   ✅ User Search & Pagination
-   ✅ Enhanced Error Handling
-   ✅ Mobile Responsive Design
-
-📋 Admin Credentials:
-   • Email: admin@tradestation.com
-   • Password: admin123
-   • Status: PROTECTED & OPTIMIZED
-
-📞 Registration Support:
-   📧 Email: user@example.com
-   📱 Phone: 08123456789 (Indonesian)
-   📱 Phone: +628123456789 (International)
-   📱 Phone: 628123456789 (Without +)
-
-🔥 Performance Optimizations:
-   ✅ Database indexes optimized
-   ✅ Query performance enhanced
-   ✅ Memory usage optimized
-   ✅ Connection pooling enabled
-   ✅ Lean queries implemented
-   ✅ Pagination for large datasets
-   ✅ Null value protection
-   ✅ Error handling comprehensive
-
-⏰ Startup Time: ${Date.now() - (process.uptime() * 1000)}ms
-🎯 All admin panel issues have been resolved!
-================================================================
-            `);
+            console.log('🎉 ================================================================');
+            console.log('🚀 TradeStation Backend Server - FIXED & OPTIMIZED v4.0.0');
+            console.log('================================================================');
+            console.log('📍 Server Details:');
+            console.log(`   • Port: ${PORT}`);
+            console.log(`   • Environment: ${process.env.NODE_ENV || 'development'}`);
+            console.log(`   • Node.js: ${process.version}`);
+            console.log('   • MongoDB: Connected & Optimized');
+            console.log(`   • Memory Usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+            console.log('');
+            console.log('✅ Fixed Issues:');
+            console.log('   🔧 Admin Panel: ALL PROBLEMS FIXED');
+            console.log('   🔧 Database Queries: SUPER OPTIMIZED & FAST');
+            console.log('   🔧 Null Value Handling: ENHANCED SAFETY');
+            console.log('   🔧 Search Functions: WORKING PERFECTLY');
+            console.log('   🔧 API Endpoints: ALL COMPLETE & TESTED');
+            console.log('   🔧 Mobile Responsive: READY TO GO');
+            console.log('   🔧 Error Handling: COMPREHENSIVE');
+            console.log('');
+            console.log('🎯 Admin Panel Features:');
+            console.log('   ✅ User Management: Enhanced with search & pagination');
+            console.log('   ✅ Bank Data Management: Full CRUD operations');
+            console.log('   ✅ Deposit Management: Fast loading & processing');
+            console.log('   ✅ Withdrawal Management: Complete & safe');
+            console.log('   ✅ Trade Management: Real-time monitoring');
+            console.log('   ✅ Mobile Responsive: Works on all devices');
+            console.log('');
+            console.log('🔗 API Endpoints:');
+            console.log('   • Health Check: GET /api/health');
+            console.log('   • Admin Debug: GET /api/admin/debug/user');
+            console.log('   • Admin Reset: POST /api/admin/debug/reset');
+            console.log('   • User Registration: POST /api/register');
+            console.log('   • User Login: POST /api/login');
+            console.log('   • Trading: POST /api/trade');
+            console.log('   • Admin Dashboard: /api/admin/*');
+            console.log('');
+            console.log('📱 Features Ready:');
+            console.log('   ✅ Real-time Price Updates');
+            console.log('   ✅ Chart Data Generation');
+            console.log('   ✅ Trade Processing');
+            console.log('   ✅ Deposit/Withdrawal Management');
+            console.log('   ✅ Bank Account Management');
+            console.log('   ✅ User Search & Pagination');
+            console.log('   ✅ Enhanced Error Handling');
+            console.log('   ✅ Mobile Responsive Design');
+            console.log('');
+            console.log('📋 Admin Credentials:');
+            console.log('   • Email: admin@tradestation.com');
+            console.log('   • Password: admin123');
+            console.log('   • Status: PROTECTED & OPTIMIZED');
+            console.log('');
+            console.log('📞 Registration Support:');
+            console.log('   📧 Email: user@example.com');
+            console.log('   📱 Phone: 08123456789 (Indonesian)');
+            console.log('   📱 Phone: +628123456789 (International)');
+            console.log('   📱 Phone: 628123456789 (Without +)');
+            console.log('');
+            console.log('🔥 Performance Optimizations:');
+            console.log('   ✅ Database indexes optimized');
+            console.log('   ✅ Query performance enhanced');
+            console.log('   ✅ Memory usage optimized');
+            console.log('   ✅ Connection pooling enabled');
+            console.log('   ✅ Lean queries implemented');
+            console.log('   ✅ Pagination for large datasets');
+            console.log('   ✅ Null value protection');
+            console.log('   ✅ Error handling comprehensive');
+            console.log('');
+            console.log(`⏰ Startup Time: ${Date.now() - (process.uptime() * 1000)}ms`);
+            console.log('🎯 All admin panel issues have been resolved!');
+            console.log('================================================================');
+        });
         });
         
     } catch (error) {
@@ -3605,9 +3604,10 @@ async function startServer() {
             console.error('   • MongoDB server is running');
             console.error('   • Network connectivity to MongoDB');
         } else if (error.code === 'EADDRINUSE') {
-            console.error(`🔧 Port ${PORT} is already in use. Please:);
+            console.error(`🔧 Port ${PORT} is already in use. Please:`);
             console.error('   • Stop the service using this port');
             console.error('   • Use a different port with PORT environment variable');
+        }
         }
         
         process.exit(1);
