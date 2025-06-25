@@ -59,32 +59,59 @@ const authLimiter = rateLimit({
 
 // User Schema - SIMPLIFIED
 const userSchema = new mongoose.Schema({
-    name: { type: String, required: true, trim: true, minlength: 2 },
+    name: { 
+        type: String, 
+        required: true, 
+        trim: true, 
+        minlength: 2 
+    },
     email: { 
         type: String, 
         trim: true, 
         lowercase: true, 
-        sparse: true,
-        default: null
+        default: null  // ✅ PENTING: Tidak ada sparse, tidak ada unique
     },
     phone: { 
         type: String, 
         trim: true, 
-        sparse: true,
-        default: null
+        default: null  // ✅ PENTING: Tidak ada sparse, tidak ada unique
     },
-    password: { type: String, required: true, minlength: 6 },
-    balance: { type: Number, default: 0, min: 0 },
-    accountType: { type: String, enum: ['standard', 'premium'], default: 'standard' },
-    isActive: { type: Boolean, default: true },
-    totalProfit: { type: Number, default: 0 },
-    totalLoss: { type: Number, default: 0 },
-    referralCode: { type: String, unique: true },
+    password: { 
+        type: String, 
+        required: true, 
+        minlength: 6 
+    },
+    balance: { 
+        type: Number, 
+        default: 0, 
+        min: 0 
+    },
+    accountType: { 
+        type: String, 
+        enum: ['standard', 'premium'], 
+        default: 'standard' 
+    },
+    isActive: { 
+        type: Boolean, 
+        default: true 
+    },
+    totalProfit: { 
+        type: Number, 
+        default: 0 
+    },
+    totalLoss: { 
+        type: Number, 
+        default: 0 
+    },
+    referralCode: { 
+        type: String, 
+        unique: true  // ✅ HANYA referralCode yang unique
+    },
     // Bank Data untuk Withdrawal
     bankData: {
-        bankName: { type: String, trim: true },
-        accountNumber: { type: String, trim: true },
-        accountHolder: { type: String, trim: true }
+        bankName: { type: String, trim: true, default: '' },
+        accountNumber: { type: String, trim: true, default: '' },
+        accountHolder: { type: String, trim: true, default: '' }
     },
     // Admin Settings untuk User Trading
     adminSettings: {
@@ -111,27 +138,26 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
-// SIMPLIFIED INDEX - Let MongoDB handle uniqueness properly
-userSchema.index({ email: 1 }, { 
-    unique: true, 
-    sparse: true
-});
-userSchema.index({ phone: 1 }, { 
-    unique: true, 
-    sparse: true
-});
+// ✅✅✅ INDEX BARU - TANPA UNIQUE CONSTRAINT
+// Hanya index untuk performance, bukan uniqueness
+userSchema.index({ email: 1 });  // ✅ HAPUS unique dan sparse
+userSchema.index({ phone: 1 });  // ✅ HAPUS unique dan sparse
+userSchema.index({ referralCode: 1 }, { unique: true });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ isActive: 1 });
 
-// Simplified validation - EITHER email OR phone required
+// ✅✅✅ PRE-VALIDATION BARU - Lebih sederhana
 userSchema.pre('validate', function(next) {
+    // ✅ BASIC CHECK: Either email OR phone required
     if (!this.email && !this.phone) {
-        this.invalidate('email', 'Either email or phone number is required');
-        this.invalidate('phone', 'Either email or phone number is required');
+        return next(new Error('Either email or phone number is required'));
     }
     next();
 });
 
-// Pre-save middleware for defaults
+// ✅✅✅ PRE-SAVE BARU - Set defaults dan normalization
 userSchema.pre('save', function(next) {
+    // ✅ Ensure adminSettings exists
     if (!this.adminSettings) {
         this.adminSettings = {
             forceWin: false,
@@ -141,12 +167,39 @@ userSchema.pre('save', function(next) {
         };
     }
     
+    // ✅ Ensure stats exists
     if (!this.stats) {
         this.stats = {
             totalTrades: 0,
             winTrades: 0,
             loseTrades: 0
         };
+    }
+    
+    // ✅ Ensure bankData exists
+    if (!this.bankData) {
+        this.bankData = {
+            bankName: '',
+            accountNumber: '',
+            accountHolder: ''
+        };
+    }
+    
+    // ✅ IMPORTANT: Phone normalization di level database
+    if (this.phone) {
+        let cleanPhone = this.phone.replace(/[\s\-\(\)\+]/g, '');
+        if (cleanPhone.startsWith('08')) {
+            this.phone = '628' + cleanPhone.substring(2);
+        } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+            this.phone = '62' + cleanPhone;
+        } else if (cleanPhone.startsWith('62')) {
+            this.phone = cleanPhone;
+        }
+    }
+    
+    // ✅ Email normalization
+    if (this.email) {
+        this.email = this.email.toLowerCase().trim();
     }
     
     next();
@@ -762,26 +815,19 @@ function isValidPhone(phone) {
 
 function normalizePhone(phone) {
     if (!phone) return null;
-    
-    let cleaned = phone.trim().replace(/[\s\-\(\)]/g, '');
-    
-    // Convert 08xxx to +628xxx format
+    let cleaned = phone.replace(/[\s\-\(\)\+]/g, '');
     if (cleaned.startsWith('08')) {
-        return '+62' + cleaned.substring(1);
+        return '628' + cleaned.substring(2);  // ← KONSISTEN 628xxx
     }
-    
-    // Add + if starts with 628
-    if (cleaned.startsWith('628')) {
-        return '+' + cleaned;
+    if (cleaned.startsWith('8') && cleaned.length >= 10) {
+        return '62' + cleaned;
     }
-    
-    // Return as is if already in +628 format
-    if (cleaned.startsWith('+628')) {
+    if (cleaned.startsWith('62')) {
         return cleaned;
     }
-    
     return cleaned;
 }
+
 
 function formatPhoneNumber(phone) {
     if (!phone) return null;
@@ -879,9 +925,6 @@ async function ensureIndexes() {
         await Deposit.collection.createIndex({ status: 1, createdAt: -1 });
         await Deposit.collection.createIndex({ userId: 1, createdAt: -1 });
         await Deposit.collection.createIndex({ createdAt: -1 });
-        
-        await User.collection.createIndex({ email: 1 }, { sparse: true });
-        await User.collection.createIndex({ phone: 1 }, { sparse: true });
         
         await Trade.collection.createIndex({ userId: 1, status: 1, createdAt: -1 });
         await Trade.collection.createIndex({ status: 1, createdAt: -1 });
@@ -1043,162 +1086,204 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
     try {
         const { name, identifier, password } = req.body;
 
-        console.log('📝 Register attempt:', { 
-            name, 
+        console.log('📝 Registration attempt:', { 
+            name: name || 'none', 
             identifier: identifier || 'none',
-            hasPassword: !!password
+            hasPassword: !!password,
+            timestamp: new Date().toISOString()
         });
 
-        // ✅ FIXED: Gunakan identifier bukan phoneNumber/email terpisah
+        // ✅ BASIC VALIDATION - Lebih sederhana
         if (!name || !identifier || !password) {
-            return res.status(400).json({ error: 'Nama, email/nomor HP, dan password wajib diisi' });
+            console.log('❌ Missing required fields');
+            return res.status(400).json({ 
+                error: 'Nama, email/nomor HP, dan password wajib diisi' 
+            });
         }
 
-        // Validasi panjang nama
-        if (name.trim().length < 2) {
-            return res.status(400).json({ error: 'Nama harus minimal 2 karakter' });
+        const trimmedName = name.trim();
+        const trimmedIdentifier = identifier.trim();
+
+        if (trimmedName.length < 2) {
+            return res.status(400).json({ 
+                error: 'Nama harus minimal 2 karakter' 
+            });
         }
 
-        // Validasi panjang password
         if (password.length < 6) {
-            return res.status(400).json({ error: 'Password harus minimal 6 karakter' });
+            return res.status(400).json({ 
+                error: 'Password harus minimal 6 karakter' 
+            });
         }
 
-        // ✅ FIXED: Deteksi apakah email atau phone
-        const isEmail = identifier.includes('@');
-        
-        // Validate format
-        if (isEmail && !isValidEmail(identifier)) {
-            return res.status(400).json({ error: 'Format email tidak valid' });
-        }
-        
-        if (!isEmail && !isValidPhone(identifier)) {
-            return res.status(400).json({ error: 'Format nomor HP tidak valid' });
-        }
+        // ✅ DETERMINE TYPE - Sederhana saja
+        const isEmail = trimmedIdentifier.includes('@');
+        console.log(`📧 Contact type: ${isEmail ? 'Email' : 'Phone'}`);
 
-        const normalizedIdentifier = isEmail ? 
-            identifier.toLowerCase().trim() : 
-            normalizePhone(identifier);
-        
-        // ✅ FIXED: Check existing user berdasarkan schema server.js
-        let existingUser = null;
+        // ✅ BASIC FORMAT VALIDATION
         if (isEmail) {
-            existingUser = await User.findOne({ 
-                email: normalizedIdentifier 
-            }).maxTimeMS(5000);
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(trimmedIdentifier)) {
+                return res.status(400).json({ 
+                    error: 'Format email tidak valid' 
+                });
+            }
         } else {
-            existingUser = await User.findOne({ 
-                phone: normalizedIdentifier 
-            }).maxTimeMS(5000);
+            // Phone validation - hanya cek digit
+            const cleanPhone = trimmedIdentifier.replace(/[\s\-\(\)\+]/g, '');
+            if (!/^[0-9]{10,15}$/.test(cleanPhone)) {
+                return res.status(400).json({ 
+                    error: 'Nomor HP harus 10-15 digit angka' 
+                });
+            }
+        }
+
+        // ✅ NORMALIZE DATA
+        let normalizedIdentifier;
+        if (isEmail) {
+            normalizedIdentifier = trimmedIdentifier.toLowerCase();
+        } else {
+            // Normalize phone: 08xxx -> 628xxx
+            let cleanPhone = trimmedIdentifier.replace(/[\s\-\(\)\+]/g, '');
+            if (cleanPhone.startsWith('08')) {
+                normalizedIdentifier = '628' + cleanPhone.substring(2);
+            } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+                normalizedIdentifier = '62' + cleanPhone;
+            } else if (cleanPhone.startsWith('62')) {
+                normalizedIdentifier = cleanPhone;
+            } else {
+                normalizedIdentifier = cleanPhone;
+            }
+        }
+
+        console.log(`🔄 Normalized: ${normalizedIdentifier}`);
+
+        // ✅ CHECK EXISTING USER - Sederhana tanpa timeout berlebih
+        let existingUser = null;
+        
+        try {
+            if (isEmail) {
+                existingUser = await User.findOne({ email: normalizedIdentifier });
+            } else {
+                existingUser = await User.findOne({ phone: normalizedIdentifier });
+            }
+        } catch (dbError) {
+            console.error('❌ Database check error:', dbError);
+            return res.status(500).json({ 
+                error: 'Database error. Silakan coba lagi.' 
+            });
         }
 
         if (existingUser) {
+            console.log('❌ User already exists');
             return res.status(400).json({ 
                 error: isEmail ? 'Email sudah terdaftar' : 'Nomor HP sudah terdaftar' 
             });
         }
 
-        // Hash password
+        // ✅ HASH PASSWORD
         const hashedPassword = await bcrypt.hash(password, 12);
 
-        // ✅ FIXED: Buat user dengan schema server.js yang tepat
+        // ✅ CREATE USER DATA - Minimal tapi lengkap
         const userData = {
-            name: name.trim(),
+            name: trimmedName,
             password: hashedPassword,
             referralCode: generateReferralCode(),
             balance: 0,
-            adminSettings: {
-                profitCollapse: 'normal',
-                profitPercentage: 80,
-                forceWin: false,
-                forceWinRate: 0
-            },
-            stats: {
-                totalTrades: 0,
-                winTrades: 0,
-                loseTrades: 0
-            }
+            isActive: true,
+            totalProfit: 0,
+            totalLoss: 0
         };
 
-        // ✅ SESUAIKAN: Set email ATAU phone berdasarkan schema server.js
+        // ✅ SET EMAIL OR PHONE - Satu saja, yang lain null
         if (isEmail) {
             userData.email = normalizedIdentifier;
-            userData.phone = null; // Explicitly set null
+            userData.phone = null;
         } else {
             userData.phone = normalizedIdentifier;
-            userData.email = null; // Explicitly set null
+            userData.email = null;
         }
-        
-        // Create and save user
-        const user = new User(userData);
-        await user.save();
-        
-        // Log activity
-        await logActivity(user._id, 'USER_REGISTER', `New user registered: ${normalizedIdentifier}`, req);
-        
-        // Generate token
+
+        console.log('💾 Creating user with data:', {
+            name: userData.name,
+            email: userData.email,
+            phone: userData.phone,
+            hasPassword: !!userData.password
+        });
+
+        // ✅ CREATE AND SAVE USER
+        let savedUser;
+        try {
+            const user = new User(userData);
+            savedUser = await user.save();
+            console.log('✅ User saved to database');
+        } catch (saveError) {
+            console.error('❌ User save error:', saveError);
+            
+            // Handle duplicate key error
+            if (saveError.code === 11000) {
+                const field = saveError.message.includes('email') ? 'Email' : 'Nomor HP';
+                return res.status(400).json({ 
+                    error: `${field} sudah terdaftar dalam sistem` 
+                });
+            }
+            
+            return res.status(500).json({ 
+                error: 'Gagal menyimpan data. Silakan coba lagi.' 
+            });
+        }
+
+        // ✅ LOG ACTIVITY (optional - jangan sampai gagal registrasi karena ini)
+        try {
+            await logActivity(savedUser._id, 'USER_REGISTER', `New user registered: ${normalizedIdentifier}`, req);
+        } catch (logError) {
+            console.error('❌ Activity log error:', logError);
+            // Don't fail registration for logging error
+        }
+
+        // ✅ GENERATE TOKEN
         const token = jwt.sign(
-            { userId: user._id },
+            { userId: savedUser._id },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
-        
-        // ✅ FIXED: Return response format yang kompatibel
+
+        // ✅ SUCCESS RESPONSE - Sederhana
+        console.log(`✅ Registration successful`);
+
         res.status(201).json({
-            message: 'Registration successful',
+            message: 'Registrasi berhasil',
             token,
             user: {
-                _id: user._id,
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                phone: user.phone ? formatPhoneNumber(user.phone) : null,
-                // ✅ TAMBAHAN: Untuk kompatibilitas frontend
-                identifier: normalizedIdentifier,
-                identifierType: isEmail ? 'email' : 'phone',
-                displayContact: isEmail ? user.email : formatPhoneNumber(user.phone),
-                balance: user.balance,
-                referralCode: user.referralCode,
-                accountType: user.accountType,
-                isActive: user.isActive,
+                _id: savedUser._id,
+                id: savedUser._id,
+                name: savedUser.name,
+                email: savedUser.email,
+                phone: savedUser.phone,
+                balance: savedUser.balance,
+                referralCode: savedUser.referralCode,
+                accountType: savedUser.accountType || 'standard',
+                isActive: savedUser.isActive,
                 status: 'active'
             }
         });
         
-        console.log(`✅ User registered successfully: ${normalizedIdentifier} (${isEmail ? 'email' : 'phone'})`);
-        
     } catch (error) {
         console.error('❌ Registration error:', error);
         
-        // ✅ SIMPLIFIED: Error handling tanpa ErrorHandler class
-        let errorMessage = 'Server error during registration';
+        // ✅ SIMPLE ERROR RESPONSE
+        let errorMessage = 'Server error. Silakan coba lagi.';
         let statusCode = 500;
         
         if (error.name === 'ValidationError') {
-            errorMessage = 'Data yang diberikan tidak valid';
-            statusCode = 400;
-        } else if (error.code === 11000) {
-            if (error.message && error.message.includes('email')) {
-                errorMessage = 'Email sudah terdaftar';
-            } else if (error.message && error.message.includes('phone')) {
-                errorMessage = 'Nomor HP sudah terdaftar';
-            } else {
-                // Fallback: detect from req.body if still accessible
-                try {
-                    const identifier = req.body.identifier;
-                    if (identifier && identifier.includes('@')) {
-                        errorMessage = 'Email sudah terdaftar';
-                    } else {
-                        errorMessage = 'Nomor HP sudah terdaftar';
-                    }
-                } catch {
-                    errorMessage = 'Data sudah terdaftar dalam sistem';
-                }
-            }
+            errorMessage = 'Data tidak valid. Periksa input Anda.';
             statusCode = 400;
         } else if (error.name === 'MongoNetworkError') {
-            errorMessage = 'Koneksi database bermasalah';
+            errorMessage = 'Koneksi database bermasalah. Silakan coba lagi.';
             statusCode = 503;
+        } else if (error.code === 11000) {
+            errorMessage = 'Data sudah terdaftar dalam sistem';
+            statusCode = 400;
         }
         
         res.status(statusCode).json({ 
@@ -1235,9 +1320,20 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             console.log('📧 Email search result:', !!user);
         }
         
-        // If not found by email, try phone
+        // If not found by email, try phone - FIXED NORMALIZATION
         if (!user && phone && isValidPhone(phone)) {
-            const normalizedPhone = normalizePhone(phone);
+            // ✅ GUNAKAN NORMALISASI YANG SAMA DENGAN REGISTER
+            let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+            let normalizedPhone = cleanPhone;
+            
+            if (cleanPhone.startsWith('08')) {
+                normalizedPhone = '628' + cleanPhone.substring(2);
+            } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+                normalizedPhone = '62' + cleanPhone;
+            } else if (cleanPhone.startsWith('62')) {
+                normalizedPhone = cleanPhone;
+            }
+            
             user = await User.findOne({ phone: normalizedPhone });
             console.log('📱 Phone search result:', !!user, 'searched for:', normalizedPhone);
         }
@@ -2507,6 +2603,259 @@ process.on('SIGINT', () => {
 
 const PORT = process.env.PORT || 3000;
 
+async function runDatabaseMigration() {
+    try {
+        console.log('🔄 Running database migration and cleanup...');
+        
+        // ✅ STEP 1: Drop conflicting indexes
+        console.log('📇 Dropping old indexes...');
+        try {
+            await User.collection.dropIndex('email_1');
+            console.log('📧 Dropped old email index');
+        } catch (e) {
+            console.log('📧 Email index not found (ok)');
+        }
+        
+        try {
+            await User.collection.dropIndex('phone_1');
+            console.log('📱 Dropped old phone index');
+        } catch (e) {
+            console.log('📱 Phone index not found (ok)');
+        }
+        
+        // ✅ STEP 2: Remove invalid data
+        console.log('🧹 Cleaning invalid data...');
+        
+        // Remove users with phone numbers in email field
+        const invalidEmailUsers = await User.find({
+            email: { $regex: /^[0-9+]/ }  // Email starts with number
+        });
+        
+        for (const user of invalidEmailUsers) {
+            console.log(`🗑️ Removing user with invalid email: ${user.email}`);
+            await User.deleteOne({ _id: user._id });
+        }
+        
+        // Remove users with email addresses in phone field
+        const invalidPhoneUsers = await User.find({
+            phone: { $regex: /@/ }  // Phone contains @
+        });
+        
+        for (const user of invalidPhoneUsers) {
+            console.log(`🗑️ Removing user with invalid phone: ${user.phone}`);
+            await User.deleteOne({ _id: user._id });
+        }
+        
+        // ✅ STEP 3: Remove duplicates - keep newest
+        console.log('🔄 Removing duplicate users...');
+        
+        // Remove duplicate emails
+        const duplicateEmails = await User.aggregate([
+            { $match: { email: { $ne: null, $ne: '' } } },
+            { $group: { 
+                _id: '$email', 
+                count: { $sum: 1 }, 
+                docs: { $push: { id: '$_id', createdAt: '$createdAt', name: '$name' } } 
+            }},
+            { $match: { count: { $gt: 1 } } }
+        ]);
+        
+        for (const duplicate of duplicateEmails) {
+            const sortedDocs = duplicate.docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            const toRemove = sortedDocs.slice(1); // Keep newest (first after sort)
+            
+            console.log(`📧 Found ${duplicate.count} users with email: ${duplicate._id}`);
+            for (const doc of toRemove) {
+                console.log(`🗑️ Removing older duplicate: ${doc.name} (${doc.id})`);
+                await User.deleteOne({ _id: doc.id });
+            }
+        }
+        
+        // Remove duplicate phones
+        const duplicatePhones = await User.aggregate([
+            { $match: { phone: { $ne: null, $ne: '' } } },
+            { $group: { 
+                _id: '$phone', 
+                count: { $sum: 1 }, 
+                docs: { $push: { id: '$_id', createdAt: '$createdAt', name: '$name' } } 
+            }},
+            { $match: { count: { $gt: 1 } } }
+        ]);
+        
+        for (const duplicate of duplicatePhones) {
+            const sortedDocs = duplicate.docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            const toRemove = sortedDocs.slice(1); // Keep newest
+            
+            console.log(`📱 Found ${duplicate.count} users with phone: ${duplicate._id}`);
+            for (const doc of toRemove) {
+                console.log(`🗑️ Removing older duplicate: ${doc.name} (${doc.id})`);
+                await User.deleteOne({ _id: doc.id });
+            }
+        }
+        
+        // ✅ STEP 4: Normalize existing data
+        console.log('🔄 Normalizing existing user data...');
+        const allUsers = await User.find();
+        
+        for (const user of allUsers) {
+            let needsSave = false;
+            
+            // Normalize phone numbers
+            if (user.phone) {
+                let cleanPhone = user.phone.replace(/[\s\-\(\)\+]/g, '');
+                let normalizedPhone = cleanPhone;
+                
+                if (cleanPhone.startsWith('08')) {
+                    normalizedPhone = '628' + cleanPhone.substring(2);
+                    needsSave = true;
+                } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+                    normalizedPhone = '62' + cleanPhone;
+                    needsSave = true;
+                }
+                
+                if (normalizedPhone !== user.phone) {
+                    user.phone = normalizedPhone;
+                    console.log(`📱 Normalized phone: ${cleanPhone} → ${normalizedPhone}`);
+                    needsSave = true;
+                }
+            }
+            
+            // Normalize emails
+            if (user.email) {
+                const normalizedEmail = user.email.toLowerCase().trim();
+                if (normalizedEmail !== user.email) {
+                    user.email = normalizedEmail;
+                    console.log(`📧 Normalized email: ${user.email} → ${normalizedEmail}`);
+                    needsSave = true;
+                }
+            }
+            
+            // Ensure required nested objects exist
+            if (!user.adminSettings) {
+                user.adminSettings = {
+                    forceWin: false,
+                    forceWinRate: 0,
+                    profitCollapse: 'normal',
+                    profitPercentage: 80
+                };
+                needsSave = true;
+            }
+            
+            if (!user.stats) {
+                user.stats = {
+                    totalTrades: 0,
+                    winTrades: 0,
+                    loseTrades: 0
+                };
+                needsSave = true;
+            }
+            
+            if (!user.bankData) {
+                user.bankData = {
+                    bankName: '',
+                    accountNumber: '',
+                    accountHolder: ''
+                };
+                needsSave = true;
+            }
+            
+            if (needsSave) {
+                await user.save();
+            }
+        }
+        
+        // ✅ STEP 5: Create new indexes (non-unique)
+        console.log('📇 Creating new indexes...');
+        await User.collection.createIndex({ email: 1 }, { background: true });
+        await User.collection.createIndex({ phone: 1 }, { background: true });
+        await User.collection.createIndex({ createdAt: -1 }, { background: true });
+        await User.collection.createIndex({ isActive: 1 }, { background: true });
+        console.log('✅ New indexes created');
+        
+        // ✅ STEP 6: Statistics
+        const totalUsers = await User.countDocuments();
+        const emailUsers = await User.countDocuments({ email: { $ne: null, $ne: '' } });
+        const phoneUsers = await User.countDocuments({ phone: { $ne: null, $ne: '' } });
+        
+        console.log(`📊 Migration Statistics:`);
+        console.log(`   Total users: ${totalUsers}`);
+        console.log(`   Email users: ${emailUsers}`);
+        console.log(`   Phone users: ${phoneUsers}`);
+        console.log(`   Duplicate emails removed: ${duplicateEmails.length}`);
+        console.log(`   Duplicate phones removed: ${duplicatePhones.length}`);
+        
+        return true;
+        
+    } catch (error) {
+        console.error('❌ Database migration error:', error);
+        return false;
+    }
+}
+
+// ✅✅✅ TAMBAHKAN JUGA FUNCTION MANUAL CLEANUP INI (OPSIONAL):
+async function manualDatabaseCleanup() {
+    try {
+        console.log('🧹 Manual database cleanup...');
+        
+        // Remove all test users
+        const testUsers = await User.deleteMany({
+            $or: [
+                { name: { $regex: /test/i } },
+                { email: { $regex: /test/i } },
+                { phone: { $regex: /^081/ } } // Remove test phone numbers
+            ]
+        });
+        
+        console.log(`🗑️ Removed ${testUsers.deletedCount} test users`);
+        
+        // Remove orphaned data
+        await Trade.deleteMany({ userId: { $exists: false } });
+        await Deposit.deleteMany({ userId: { $exists: false } });
+        await Withdrawal.deleteMany({ userId: { $exists: false } });
+        
+        console.log('✅ Manual cleanup completed');
+        
+    } catch (error) {
+        console.error('❌ Manual cleanup error:', error);
+    }
+}
+
+// ========================================
+// 📝 OPSIONAL: TAMBAHKAN ROUTE UNTUK MANUAL MIGRATION
+// ========================================
+
+// ✅ TAMBAHKAN ROUTE INI SETELAH ROUTE LAINNYA (opsional untuk testing):
+app.post('/api/admin/run-migration', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        console.log('🔄 Manual migration requested by admin');
+        
+        const migrationResult = await runDatabaseMigration();
+        
+        if (migrationResult) {
+            res.json({
+                message: 'Database migration completed successfully',
+                timestamp: new Date().toISOString(),
+                status: 'success'
+            });
+        } else {
+            res.status(500).json({
+                error: 'Database migration failed',
+                timestamp: new Date().toISOString(),
+                status: 'error'
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Manual migration error:', error);
+        res.status(500).json({
+            error: 'Migration failed',
+            details: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
 async function startServer() {
     try {
         await mongoose.connect(process.env.MONGODB_URI, {
@@ -2520,6 +2869,13 @@ async function startServer() {
         });
         
         console.log('✅ Connected to MongoDB');
+        console.log('🔄 Starting database migration...');
+        const migrationSuccess = await runDatabaseMigration();
+        if (migrationSuccess) {
+            console.log('✅ Database migration completed successfully');
+        } else {
+            console.log('⚠️ Database migration had issues, but continuing...');
+        }
         
         if (mongoose.connection.readyState === 1) {
             ensureIndexes();
@@ -2659,5 +3015,6 @@ async function startServer() {
 }
 
 startServer();
+
 
 module.exports = app;
