@@ -3591,7 +3591,7 @@ async function startServer() {
             console.log('🎯 All admin panel issues have been resolved!');
             console.log('================================================================');
         });
-        });
+        };
         
     } catch (error) {
         console.error('❌ Failed to start server:', error);
@@ -3611,8 +3611,8 @@ async function startServer() {
         }
         
         process.exit(1);
-    }
-}
+    
+
 
 // ✅ START THE SERVER
 startServer();
