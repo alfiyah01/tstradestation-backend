@@ -2623,7 +2623,7 @@ app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res)
         const limitNum = Math.min(100, Math.max(10, parseInt(limit)));
         const skip = (pageNum - 1) * limitNum;
         
-        const queryTimeout = 10000;  // ✅ REDUCED TIMEOUT
+        const queryTimeout = 15000;  // ✅ INCREASED TIMEOUT
         
         let query = {};
         if (status && ['pending', 'approved', 'rejected'].includes(status)) {
@@ -2632,61 +2632,64 @@ app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res)
         
         console.log('🔍 Deposit query:', query);
         
-        // ✅ SUPER OPTIMIZED QUERY
+        // ✅ OPTIMIZED QUERY WITH BETTER ERROR HANDLING
         const depositsPromise = Deposit.find(query)
             .populate({
                 path: 'userId',
-                select: 'name email phone',  // ✅ MINIMAL FIELDS
-                options: { lean: true }      // ✅ LEAN POPULATION
+                select: 'name email phone',
+                options: { lean: true }
             })
-            .select('userId amount method bankFrom status adminNotes createdAt processedAt fileName')  // ✅ SPECIFIC FIELDS
+            .select('userId amount method bankFrom status adminNotes createdAt processedAt fileName fileType transferTime')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
-            .lean()                          // ✅ LEAN QUERY
-            .maxTimeMS(queryTimeout)
-            .exec();
+            .lean()
+            .maxTimeMS(queryTimeout);
         
-        const deposits = await Promise.race([
-            depositsPromise,
-            new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Query timeout')), queryTimeout)
-            )
-        ]);
+        const deposits = await depositsPromise;
         
         const endTime = Date.now();
         console.log(`✅ Deposits loaded: ${deposits.length} records in ${endTime - startTime}ms`);
         
-        // ✅ ENHANCED DATA SAFETY - FILTER AND SANITIZE
+        // ✅ ENHANCED DATA SAFETY WITH BETTER NULL HANDLING
         const safeDeposits = deposits
-            .filter(deposit => deposit && deposit._id && deposit.amount)  // ✅ FILTER INVALID
-            .map(deposit => ({
-                _id: deposit._id,
-                userId: deposit.userId ? {
-                    _id: deposit.userId._id,
-                    name: deposit.userId.name || 'Unknown User',
-                    email: deposit.userId.email || null,
-                    phone: deposit.userId.phone || null
-                } : {
-                    _id: 'unknown',
-                    name: 'Unknown User',
-                    email: null,
-                    phone: null
-                },
-                amount: deposit.amount || 0,
-                method: deposit.method || 'Bank Transfer',
-                bankFrom: deposit.bankFrom || 'Not specified',
-                status: deposit.status || 'pending',
-                adminNotes: deposit.adminNotes || '',
-                fileName: deposit.fileName || 'payment_proof',
-                createdAt: deposit.createdAt,
-                processedAt: deposit.processedAt
-            }));
+            .filter(deposit => deposit && deposit._id)
+            .map(deposit => {
+                const user = deposit.userId || {};
+                return {
+                    _id: deposit._id,
+                    userId: {
+                        _id: user._id || 'unknown',
+                        name: user.name || 'Unknown User',
+                        email: user.email || null,
+                        phone: user.phone || null
+                    },
+                    amount: Number(deposit.amount) || 0,
+                    method: deposit.method || 'Bank Transfer',
+                    bankFrom: deposit.bankFrom || 'Not specified',
+                    status: deposit.status || 'pending',
+                    adminNotes: deposit.adminNotes || '',
+                    fileName: deposit.fileName || 'payment_proof',
+                    fileType: deposit.fileType || 'image/jpeg',
+                    createdAt: deposit.createdAt,
+                    processedAt: deposit.processedAt,
+                    transferTime: deposit.transferTime,
+                    // ✅ ADD PROCESSING FLAGS FOR FRONTEND
+                    canProcess: deposit.status === 'pending',
+                    isProcessed: ['approved', 'rejected'].includes(deposit.status)
+                };
+            });
         
-        // ✅ OPTIMIZED COUNT QUERY
         const totalDeposits = await Deposit.countDocuments(query).maxTimeMS(5000);
         
+        // ✅ CONSISTENT RESPONSE FORMAT
+        res.set({
+            'Cache-Control': 'no-cache',
+            'Content-Type': 'application/json'
+        });
+        
         res.json({ 
+            success: true,
             deposits: safeDeposits,
             pagination: {
                 page: pageNum,
@@ -2696,7 +2699,8 @@ app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res)
             },
             count: safeDeposits.length,
             queryTime: endTime - startTime,
-            status: 'success'
+            status: 'success',
+            timestamp: new Date().toISOString()
         });
         
     } catch (error) {
@@ -2704,18 +2708,22 @@ app.get('/api/admin/deposits', authenticateToken, requireAdmin, async (req, res)
         console.error('❌ Admin deposits error:', error);
         console.error('⏱️ Query time before error:', endTime - startTime + 'ms');
         
-        if (error.message === 'Query timeout') {
-            console.error('🕐 Database query timeout - consider optimizing or increasing timeout');
-        } else if (error.name === 'MongoError') {
-            console.error('🗃️ MongoDB error:', error.message);
-        }
-        
-        res.status(500).json({ 
+        // ✅ DETAILED ERROR RESPONSE
+        const errorResponse = {
+            success: false,
             error: 'Failed to load deposits',
             message: process.env.NODE_ENV === 'development' ? error.message : 'Database error',
             queryTime: endTime - startTime,
-            status: 'error'
-        });
+            status: 'error',
+            timestamp: new Date().toISOString(),
+            details: process.env.NODE_ENV === 'development' ? {
+                name: error.name,
+                code: error.code,
+                stack: error.stack
+            } : null
+        };
+        
+        res.status(500).json(errorResponse);
     }
 });
 
@@ -2748,103 +2756,297 @@ app.put('/api/admin/deposit/:id', authenticateToken, requireAdmin, async (req, r
         const { id } = req.params;
         const { status, adminNotes } = req.body;
         
-        console.log(`📝 Processing deposit ${id}:`, { status, adminNotes });
+        console.log(`📝 Processing deposit ${id}:`, { status, adminNotes, timestamp: new Date().toISOString() });
         
-        if (!['pending', 'approved', 'rejected'].includes(status)) {
-            return res.status(400).json({ error: 'Invalid status' });
+        // ✅ ENHANCED VALIDATION
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Invalid deposit ID',
+                details: 'Deposit ID must be a valid MongoDB ObjectId'
+            });
         }
         
+        if (!['pending', 'approved', 'rejected'].includes(status)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Invalid status',
+                details: 'Status must be: pending, approved, or rejected',
+                allowedValues: ['pending', 'approved', 'rejected']
+            });
+        }
+        
+        // ✅ USE TRANSACTION FOR DATA CONSISTENCY
         const session = await mongoose.startSession();
+        let result = null;
         
         try {
-            session.startTransaction();
-            
-            const deposit = await Deposit.findById(id)
-                .populate('userId')
-                .session(session);
-                
-            if (!deposit) {
-                await session.abortTransaction();
-                return res.status(404).json({ error: 'Deposit not found' });
-            }
-            
-            if (deposit.status !== 'pending') {
-                await session.abortTransaction();
-                return res.status(400).json({ error: 'Deposit already processed' });
-            }
-            
-            deposit.status = status;
-            deposit.adminNotes = adminNotes || '';
-            deposit.processedAt = new Date();
-            
-            if (status === 'approved') {
-                if (!deposit.userId) {
-                    await session.abortTransaction();
-                    return res.status(400).json({ error: 'User not found for this deposit' });
+            await session.withTransaction(async () => {
+                // ✅ FIND DEPOSIT WITH PROPER POPULATION
+                const deposit = await Deposit.findById(id)
+                    .populate({
+                        path: 'userId',
+                        select: 'name email phone balance'
+                    })
+                    .session(session);
+                    
+                if (!deposit) {
+                    throw new Error('DEPOSIT_NOT_FOUND');
                 }
                 
-                deposit.userId.balance += deposit.amount;
-                await deposit.userId.save({ session });
+                console.log(`📄 Found deposit:`, {
+                    id: deposit._id,
+                    amount: deposit.amount,
+                    currentStatus: deposit.status,
+                    userId: deposit.userId?._id,
+                    userName: deposit.userId?.name
+                });
                 
-                console.log(`💰 Added ${deposit.amount} to user ${deposit.userId.name} balance`);
+                if (deposit.status !== 'pending') {
+                    throw new Error('DEPOSIT_ALREADY_PROCESSED');
+                }
                 
-                setTimeout(() => {
-                    try {
-                        io.to(deposit.userId._id.toString()).emit('depositApproved', {
-                            amount: deposit.amount,
-                            newBalance: deposit.userId.balance,
-                            message: 'Your deposit has been approved!'
-                        });
-                    } catch (socketError) {
-                        console.error('❌ Socket notification error:', socketError);
+                if (!deposit.userId) {
+                    throw new Error('USER_NOT_FOUND');
+                }
+                
+                // ✅ UPDATE DEPOSIT RECORD
+                const previousStatus = deposit.status;
+                deposit.status = status;
+                deposit.adminNotes = adminNotes || '';
+                deposit.processedAt = new Date();
+                
+                let userBalanceChange = 0;
+                
+                // ✅ HANDLE BALANCE UPDATE FOR APPROVED DEPOSITS
+                if (status === 'approved') {
+                    const depositAmount = Number(deposit.amount);
+                    if (isNaN(depositAmount) || depositAmount <= 0) {
+                        throw new Error('INVALID_DEPOSIT_AMOUNT');
                     }
-                }, 100);
-            }
-            
-            await deposit.save({ session });
-            await session.commitTransaction();
-            
-            await logActivity(
-                req.userId, 
-                'ADMIN_DEPOSIT_PROCESS', 
-                `${status.toUpperCase()} deposit: ${formatCurrency(deposit.amount)} for ${deposit.userId?.name || 'Unknown'}`,
-                req
-            );
-            
-            const endTime = Date.now();
-            console.log(`✅ Deposit ${status} successfully in ${endTime - startTime}ms`);
-            
-            res.json({ 
-                message: `Deposit ${status} successfully`,
-                deposit: {
-                    _id: deposit._id,
+                    
+                    const previousBalance = deposit.userId.balance;
+                    deposit.userId.balance += depositAmount;
+                    userBalanceChange = depositAmount;
+                    
+                    console.log(`💰 Balance update:`, {
+                        userId: deposit.userId._id,
+                        previousBalance,
+                        depositAmount,
+                        newBalance: deposit.userId.balance
+                    });
+                    
+                    await deposit.userId.save({ session });
+                }
+                
+                await deposit.save({ session });
+                
+                // ✅ PREPARE RESULT DATA
+                result = {
+                    deposit: {
+                        _id: deposit._id,
+                        status: deposit.status,
+                        processedAt: deposit.processedAt,
+                        adminNotes: deposit.adminNotes,
+                        amount: deposit.amount
+                    },
+                    user: {
+                        _id: deposit.userId._id,
+                        name: deposit.userId.name,
+                        newBalance: deposit.userId.balance,
+                        balanceChange: userBalanceChange
+                    },
+                    previousStatus,
+                    processing: {
+                        processedBy: req.user.name,
+                        processedAt: deposit.processedAt,
+                        approved: status === 'approved'
+                    }
+                };
+                
+                console.log(`✅ Deposit processing completed:`, {
+                    depositId: deposit._id,
                     status: deposit.status,
-                    processedAt: deposit.processedAt
-                },
-                queryTime: endTime - startTime,
-                status: 'success'
+                    userBalance: deposit.userId.balance
+                });
             });
             
         } catch (transactionError) {
             await session.abortTransaction();
             throw transactionError;
         } finally {
-            session.endSession();
+            await session.endSession();
         }
+        
+        // ✅ LOG ACTIVITY AFTER SUCCESSFUL TRANSACTION
+        try {
+            await logActivity(
+                req.userId, 
+                'ADMIN_DEPOSIT_PROCESS', 
+                `${status.toUpperCase()} deposit: ${formatCurrency(result.deposit.amount)} for ${result.user.name}`,
+                req
+            );
+        } catch (logError) {
+            console.error('❌ Activity logging failed:', logError);
+        }
+        
+        // ✅ SEND SOCKET NOTIFICATION
+        if (status === 'approved' && result.user._id) {
+            try {
+                setTimeout(() => {
+                    io.to(result.user._id.toString()).emit('depositApproved', {
+                        amount: result.deposit.amount,
+                        newBalance: result.user.newBalance,
+                        message: 'Your deposit has been approved!',
+                        timestamp: new Date().toISOString()
+                    });
+                }, 100);
+                console.log(`📡 Socket notification sent to user: ${result.user._id}`);
+            } catch (socketError) {
+                console.error('❌ Socket notification failed:', socketError);
+            }
+        }
+        
+        const endTime = Date.now();
+        const processingTime = endTime - startTime;
+        
+        console.log(`✅ Deposit ${status} successfully in ${processingTime}ms`);
+        
+        // ✅ CONSISTENT SUCCESS RESPONSE FORMAT
+        const response = {
+            success: true,
+            message: `Deposit ${status} successfully`,
+            data: result,
+            processing: {
+                time: processingTime,
+                timestamp: new Date().toISOString(),
+                processedBy: req.user.name
+            },
+            status: 'success'
+        };
+        
+        res.status(200).json(response);
         
     } catch (error) {
         const endTime = Date.now();
-        console.error('❌ Admin deposit process error:', error);
-        console.error('⏱️ Process time before error:', endTime - startTime + 'ms');
+        const processingTime = endTime - startTime;
         
-        res.status(500).json({ 
-            error: 'Failed to process deposit',
-            message: process.env.NODE_ENV === 'development' ? error.message : 'Processing error',
-            queryTime: endTime - startTime,
-            status: 'error'
-        });
+        console.error('❌ Admin deposit process error:', error);
+        console.error('⏱️ Process time before error:', processingTime + 'ms');
+        
+        // ✅ SPECIFIC ERROR HANDLING
+        let statusCode = 500;
+        let errorMessage = 'Failed to process deposit';
+        let errorDetails = error.message;
+        
+        if (error.message === 'DEPOSIT_NOT_FOUND') {
+            statusCode = 404;
+            errorMessage = 'Deposit not found';
+            errorDetails = 'The specified deposit does not exist';
+        } else if (error.message === 'DEPOSIT_ALREADY_PROCESSED') {
+            statusCode = 400;
+            errorMessage = 'Deposit already processed';
+            errorDetails = 'This deposit has already been approved or rejected';
+        } else if (error.message === 'USER_NOT_FOUND') {
+            statusCode = 400;
+            errorMessage = 'User not found';
+            errorDetails = 'The user associated with this deposit no longer exists';
+        } else if (error.message === 'INVALID_DEPOSIT_AMOUNT') {
+            statusCode = 400;
+            errorMessage = 'Invalid deposit amount';
+            errorDetails = 'Deposit amount must be a positive number';
+        }
+        
+        const errorResponse = {
+            success: false,
+            error: errorMessage,
+            message: errorDetails,
+            processing: {
+                time: processingTime,
+                timestamp: new Date().toISOString(),
+                failed: true
+            },
+            status: 'error',
+            ...(process.env.NODE_ENV === 'development' && {
+                debug: {
+                    originalError: error.message,
+                    stack: error.stack,
+                    name: error.name
+                }
+            })
+        };
+        
+        res.status(statusCode).json(errorResponse);
     }
 });
+
+// ========================================
+// 🐛 DEBUGGING ENDPOINT - DEVELOPMENT ONLY
+// ========================================
+
+if (process.env.NODE_ENV === 'development') {
+    app.get('/api/admin/debug/deposits', authenticateToken, requireAdmin, async (req, res) => {
+        try {
+            const totalDeposits = await Deposit.countDocuments();
+            const pendingDeposits = await Deposit.countDocuments({ status: 'pending' });
+            const approvedDeposits = await Deposit.countDocuments({ status: 'approved' });
+            const rejectedDeposits = await Deposit.countDocuments({ status: 'rejected' });
+            
+            const recentDeposits = await Deposit.find()
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .populate('userId', 'name email')
+                .lean();
+            
+            res.json({
+                debug: true,
+                timestamp: new Date().toISOString(),
+                environment: process.env.NODE_ENV,
+                counts: {
+                    total: totalDeposits,
+                    pending: pendingDeposits,
+                    approved: approvedDeposits,
+                    rejected: rejectedDeposits
+                },
+                recentDeposits: recentDeposits.map(d => ({
+                    _id: d._id,
+                    amount: d.amount,
+                    status: d.status,
+                    user: d.userId?.name || 'Unknown',
+                    createdAt: d.createdAt
+                })),
+                databaseConnection: {
+                    readyState: mongoose.connection.readyState,
+                    readyStates: {
+                        0: 'disconnected',
+                        1: 'connected', 
+                        2: 'connecting',
+                        3: 'disconnecting'
+                    },
+                    currentState: mongoose.connection.readyState === 1 ? 'connected' : 'not connected',
+                    host: mongoose.connection.host,
+                    name: mongoose.connection.name
+                },
+                serverInfo: {
+                    nodeVersion: process.version,
+                    platform: process.platform,
+                    uptime: process.uptime(),
+                    memoryUsage: process.memoryUsage()
+                }
+            });
+        } catch (error) {
+            console.error('❌ Debug endpoint error:', error);
+            res.status(500).json({ 
+                debug: true,
+                error: error.message,
+                stack: error.stack,
+                timestamp: new Date().toISOString()
+            });
+        }
+    });
+    
+    console.log('🐛 Debug endpoint added: /api/admin/debug/deposits');
+}
 
 app.get('/api/admin/health/database', authenticateToken, requireAdmin, async (req, res) => {
     try {
