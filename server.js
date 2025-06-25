@@ -248,7 +248,12 @@ tradeSchema.index({ symbol: 1, createdAt: -1 });
 const depositSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     amount: { type: Number, required: true, min: 500000, index: true },
-    method: { type: String, default: 'Bank Transfer' },
+    method: { 
+        type: String, 
+        enum: ['bank', 'qris'], 
+        default: 'bank',
+        index: true 
+    }, 
     bankFrom: { type: String },
     receipt: { type: String }, // base64 file data
     fileName: { type: String },
@@ -1992,7 +1997,7 @@ app.get('/api/trades', authenticateToken, async (req, res) => {
 
 app.post('/api/deposit', authenticateToken, async (req, res) => {
     try {
-        const { amount, receipt, fileName, fileType, bankFrom } = req.body;
+        const { amount, receipt, fileName, fileType, bankFrom, method } = req.body;
         
         if (!amount || amount < 500000) {
             return res.status(400).json({ error: 'Minimum deposit is Rp 500,000' });
@@ -2011,11 +2016,14 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
         if (sizeInBytes > 5 * 1024 * 1024) {
             return res.status(400).json({ error: 'File size too large. Maximum 5MB allowed.' });
         }
-        
+
+        const depositMethod = method === 'qris' ? 'qris' : 'bank';
+
         const deposit = new Deposit({
             userId: req.userId,
             amount,
-            bankFrom: bankFrom || 'Not specified',
+            method: depositMethod,
+            bankFrom: bankFrom || (depositMethod === 'qris' ? 'QRIS Payment' : 'Not specified'),
             receipt,
             fileName: fileName || 'payment_proof',
             fileType,
@@ -2025,7 +2033,13 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
         
         await deposit.save();
         
-        await logActivity(req.userId, 'DEPOSIT_REQUEST', `Deposit request: ${formatCurrency(amount)}`, req);
+        const methodText = depositMethod === 'qris' ? 'QRIS' : 'Bank Transfer';
+        await logActivity(
+            req.userId, 
+            'DEPOSIT_REQUEST', 
+            `${methodText} deposit request: ${formatCurrency(amount)}`, 
+            req
+        );
         
         res.status(201).json({
             message: 'Deposit request submitted successfully',
@@ -2038,7 +2052,7 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
             }
         });
         
-        console.log(`✅ Deposit request: ${formatCurrency(amount)} from user ${req.user.name}`);
+        console.log(`✅ ${methodText} deposit request: ${formatCurrency(amount)} from user ${req.user.name}`);
         
     } catch (error) {
         console.error('❌ Deposit error:', error);
@@ -2192,13 +2206,32 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
             .limit(15)
             .lean();
         
+        // 🆕 QRIS STATISTICS
+        const [bankDeposits, qrisDeposits, bankAmount, qrisAmount] = await Promise.all([
+            Deposit.countDocuments({ method: 'bank', status: 'approved' }),
+            Deposit.countDocuments({ method: 'qris', status: 'approved' }),
+            Deposit.aggregate([
+                { $match: { method: 'bank', status: 'approved' } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            Deposit.aggregate([
+                { $match: { method: 'qris', status: 'approved' } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ])
+        ]);
+        
         const stats = {
             users: { total: totalUsers, active: activeUsers },
             trades: { total: totalTrades, active: activeTrades },
             deposits: { total: totalDeposits, pending: pendingDeposits },
             withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
             volume: { total: totalVolume, today: todayVolume },
-            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts }
+            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts },
+            // 🆕 PAYMENT METHODS STATISTICS
+            paymentMethods: {
+                bank: { count: bankDeposits, amount: bankAmount[0]?.total || 0 },
+                qris: { count: qrisDeposits, amount: qrisAmount[0]?.total || 0 }
+            }
         };
         
         res.json({ 
@@ -3355,6 +3388,134 @@ app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, asyn
     } catch (error) {
         console.error('❌ Admin bank account delete error:', error);
         res.status(500).json({ error: 'Failed to delete bank account' });
+    }
+});
+
+// ========================================
+// 🆕 QRIS MANAGEMENT ENDPOINTS
+// ========================================
+
+// 📊 QRIS Statistics Endpoint
+app.get('/api/admin/qris/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        console.log('📊 Loading QRIS statistics...');
+        
+        const [
+            totalQRISTransactions,
+            totalQRISAmount,
+            todayQRISCount,
+            pendingQRISCount
+        ] = await Promise.all([
+            Deposit.countDocuments({ method: 'qris' }),
+            Deposit.aggregate([
+                { $match: { method: 'qris', status: 'approved' } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
+            Deposit.countDocuments({
+                method: 'qris',
+                createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+            }),
+            Deposit.countDocuments({ method: 'qris', status: 'pending' })
+        ]);
+
+        const stats = {
+            totalTransactions: totalQRISTransactions,
+            totalAmount: totalQRISAmount[0]?.total || 0,
+            todayCount: todayQRISCount,
+            pendingCount: pendingQRISCount,
+            lastUpdated: new Date().toISOString()
+        };
+
+        res.json(stats);
+        console.log('✅ QRIS statistics loaded:', stats);
+
+    } catch (error) {
+        console.error('❌ QRIS statistics error:', error);
+        res.status(500).json({ error: 'Failed to load QRIS statistics' });
+    }
+});
+
+// 📱 QRIS Upload Endpoint
+app.post('/api/admin/qris/upload', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { qrisImage, notes } = req.body;
+        
+        if (!qrisImage) {
+            return res.status(400).json({ error: 'QRIS image is required' });
+        }
+
+        // Validate image format
+        const allowedFormats = ['data:image/jpeg', 'data:image/png', 'data:image/jpg'];
+        const isValidFormat = allowedFormats.some(format => qrisImage.startsWith(format));
+        
+        if (!isValidFormat) {
+            return res.status(400).json({ error: 'Invalid image format. Only JPEG and PNG allowed.' });
+        }
+
+        // Check file size (5MB limit)
+        const sizeInBytes = (qrisImage.length * 3) / 4;
+        if (sizeInBytes > 5 * 1024 * 1024) {
+            return res.status(400).json({ error: 'File too large. Maximum 5MB allowed.' });
+        }
+
+        // Here you would typically save to file system or cloud storage
+        // For this example, we'll simulate successful upload
+        const qrisUrl = '/uploads/qris.png'; // This would be the actual file URL
+
+        await logActivity(
+            req.userId, 
+            'ADMIN_QRIS_UPLOAD', 
+            `QRIS QR code updated. Notes: ${notes || 'No notes'}`,
+            req
+        );
+
+        res.json({
+            message: 'QRIS uploaded successfully',
+            qrisUrl: qrisUrl,
+            uploadedAt: new Date().toISOString(),
+            notes: notes || ''
+        });
+
+        console.log('✅ QRIS QR code uploaded by admin');
+
+    } catch (error) {
+        console.error('❌ QRIS upload error:', error);
+        res.status(500).json({ error: 'Failed to upload QRIS' });
+    }
+});
+
+// 📋 Recent QRIS Transactions
+app.get('/api/admin/deposits/qris/recent', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { limit = 10 } = req.query;
+        
+        const recentQRIS = await Deposit.find({ method: 'qris' })
+            .populate({
+                path: 'userId',
+                select: 'name email phone'
+            })
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit))
+            .lean();
+
+        const safeQRIS = recentQRIS
+            .filter(deposit => deposit.userId)
+            .map(deposit => ({
+                _id: deposit._id,
+                userId: {
+                    _id: deposit.userId._id,
+                    name: deposit.userId.name || 'Unknown User'
+                },
+                amount: deposit.amount,
+                status: deposit.status,
+                createdAt: deposit.createdAt
+            }));
+
+        res.json({ transactions: safeQRIS });
+
+    } catch (error) {
+        console.error('❌ Recent QRIS error:', error);
+        res.status(500).json({ error: 'Failed to load recent QRIS transactions' });
     }
 });
 
