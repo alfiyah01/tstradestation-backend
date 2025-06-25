@@ -3605,7 +3605,7 @@ async function startServer() {
             console.error('   • MongoDB server is running');
             console.error('   • Network connectivity to MongoDB');
         } else if (error.code === 'EADDRINUSE') {
-            console.error(`🔧 Port ${PORT} is already in use. Please:});
+            console.error(`🔧 Port ${PORT} is already in use. Please:);
             console.error('   • Stop the service using this port');
             console.error('   • Use a different port with PORT environment variable');
         }
