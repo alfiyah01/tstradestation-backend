@@ -3595,6 +3595,404 @@ app.post('/api/admin/run-migration', authenticateToken, requireAdmin, async (req
 });
 
 // ========================================
+// 🆕 ADMIN ADD USER ENDPOINT - TAMBAHKAN DI SERVER.JS
+// ========================================
+
+// POST /api/admin/users - Tambah user baru oleh admin
+app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { 
+            name, 
+            email, 
+            phone, 
+            password, 
+            balance = 0, 
+            accountType = 'standard',
+            adminSettings = {
+                forceWin: false,
+                forceWinRate: 0,
+                profitCollapse: 'normal',
+                profitPercentage: 80
+            },
+            bankData = {
+                bankName: '',
+                accountNumber: '',
+                accountHolder: ''
+            },
+            isActive = true
+        } = req.body;
+
+        console.log('👤 Admin creating new user:', { 
+            name, 
+            email: email || 'none', 
+            phone: phone || 'none',
+            adminBy: req.user.name
+        });
+
+        // ✅ VALIDASI INPUT
+        if (!name || name.trim().length < 2) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Nama harus minimal 2 karakter' 
+            });
+        }
+
+        if (!email && !phone) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Email atau nomor HP wajib diisi' 
+            });
+        }
+
+        if (!password || password.length < 6) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Password harus minimal 6 karakter' 
+            });
+        }
+
+        // ✅ VALIDASI EMAIL (jika ada)
+        if (email) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email.trim())) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Format email tidak valid' 
+                });
+            }
+        }
+
+        // ✅ VALIDASI PHONE (jika ada)
+        if (phone) {
+            const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+            if (!/^[0-9]{10,15}$/.test(cleanPhone)) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Nomor HP harus 10-15 digit angka' 
+                });
+            }
+        }
+
+        // ✅ VALIDASI BALANCE
+        const userBalance = parseFloat(balance);
+        if (isNaN(userBalance) || userBalance < 0) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Balance harus berupa angka positif' 
+            });
+        }
+
+        // ✅ NORMALISASI DATA
+        let normalizedEmail = null;
+        let normalizedPhone = null;
+
+        if (email) {
+            normalizedEmail = email.toLowerCase().trim();
+        }
+
+        if (phone) {
+            let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+            if (cleanPhone.startsWith('08')) {
+                normalizedPhone = '628' + cleanPhone.substring(2);
+            } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+                normalizedPhone = '62' + cleanPhone;
+            } else if (cleanPhone.startsWith('62')) {
+                normalizedPhone = cleanPhone;
+            } else {
+                normalizedPhone = cleanPhone;
+            }
+        }
+
+        // ✅ CEK USER SUDAH ADA
+        let existingUser = null;
+        
+        if (normalizedEmail) {
+            existingUser = await User.findOne({ email: normalizedEmail });
+            if (existingUser) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Email sudah terdaftar dalam sistem' 
+                });
+            }
+        }
+
+        if (normalizedPhone) {
+            existingUser = await User.findOne({ phone: normalizedPhone });
+            if (existingUser) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Nomor HP sudah terdaftar dalam sistem' 
+                });
+            }
+        }
+
+        // ✅ HASH PASSWORD
+        const hashedPassword = await bcrypt.hash(password, 12);
+
+        // ✅ GENERATE REFERRAL CODE
+        let referralCode;
+        let isReferralUnique = false;
+        
+        while (!isReferralUnique) {
+            referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+            const existingReferral = await User.findOne({ referralCode });
+            if (!existingReferral) {
+                isReferralUnique = true;
+            }
+        }
+
+        // ✅ BUAT USER DATA
+        const userData = {
+            name: name.trim(),
+            email: normalizedEmail,
+            phone: normalizedPhone,
+            password: hashedPassword,
+            balance: userBalance,
+            accountType: ['standard', 'premium'].includes(accountType) ? accountType : 'standard',
+            isActive: Boolean(isActive),
+            referralCode,
+            totalProfit: 0,
+            totalLoss: 0,
+            adminSettings: {
+                forceWin: Boolean(adminSettings.forceWin),
+                forceWinRate: Math.max(0, Math.min(100, parseFloat(adminSettings.forceWinRate) || 0)),
+                profitCollapse: ['normal', 'profit', 'collapse'].includes(adminSettings.profitCollapse) 
+                    ? adminSettings.profitCollapse : 'normal',
+                profitPercentage: Math.max(20, Math.min(100, parseInt(adminSettings.profitPercentage) || 80))
+            },
+            stats: {
+                totalTrades: 0,
+                winTrades: 0,
+                loseTrades: 0
+            },
+            bankData: {
+                bankName: (bankData.bankName || '').trim(),
+                accountNumber: (bankData.accountNumber || '').trim(),
+                accountHolder: (bankData.accountHolder || '').trim()
+            }
+        };
+
+        console.log('💾 Creating user with admin settings:', {
+            name: userData.name,
+            email: userData.email,
+            phone: userData.phone,
+            balance: userData.balance,
+            accountType: userData.accountType,
+            isActive: userData.isActive
+        });
+
+        // ✅ SIMPAN USER KE DATABASE
+        const newUser = new User(userData);
+        const savedUser = await newUser.save();
+
+        // ✅ LOG ACTIVITY
+        await logActivity(
+            req.userId, 
+            'ADMIN_USER_CREATE', 
+            `Created user: ${savedUser.name} (${savedUser.email || savedUser.phone}) with balance ${formatCurrency(savedUser.balance)}`,
+            req
+        );
+
+        // ✅ RESPONSE SUCCESS
+        const userResponse = savedUser.toObject();
+        delete userResponse.password; // Hapus password dari response
+
+        res.status(201).json({
+            success: true,
+            message: 'User berhasil dibuat oleh admin',
+            user: userResponse,
+            metadata: {
+                createdBy: req.user.name,
+                createdAt: new Date().toISOString(),
+                initialBalance: userBalance,
+                referralCode: referralCode
+            }
+        });
+
+        console.log(`✅ User created by admin: ${savedUser.name} with balance ${formatCurrency(savedUser.balance)}`);
+
+    } catch (error) {
+        console.error('❌ Admin create user error:', error);
+        
+        // ✅ HANDLE SPECIFIC ERRORS
+        let errorMessage = 'Gagal membuat user';
+        let statusCode = 500;
+        
+        if (error.code === 11000) {
+            if (error.message.includes('email')) {
+                errorMessage = 'Email sudah terdaftar dalam sistem';
+            } else if (error.message.includes('phone')) {
+                errorMessage = 'Nomor HP sudah terdaftar dalam sistem';
+            } else if (error.message.includes('referralCode')) {
+                errorMessage = 'Referral code conflict, silakan coba lagi';
+            } else {
+                errorMessage = 'Data sudah ada dalam sistem';
+            }
+            statusCode = 400;
+        } else if (error.name === 'ValidationError') {
+            errorMessage = 'Data tidak valid: ' + Object.values(error.errors).map(e => e.message).join(', ');
+            statusCode = 400;
+        }
+        
+        res.status(statusCode).json({ 
+            success: false,
+            error: errorMessage,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// ========================================
+// 🔄 BULK ADD USERS ENDPOINT (OPSIONAL)
+// ========================================
+
+// POST /api/admin/users/bulk - Tambah multiple users sekaligus
+app.post('/api/admin/users/bulk', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { users } = req.body;
+        
+        if (!Array.isArray(users) || users.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array users diperlukan dan tidak boleh kosong'
+            });
+        }
+
+        if (users.length > 50) {
+            return res.status(400).json({
+                success: false,
+                error: 'Maksimal 50 users per batch'
+            });
+        }
+
+        console.log(`👥 Admin bulk creating ${users.length} users`);
+
+        const results = {
+            success: [],
+            failed: [],
+            total: users.length
+        };
+
+        // ✅ PROCESS EACH USER
+        for (let i = 0; i < users.length; i++) {
+            const userData = users[i];
+            
+            try {
+                // Validasi basic
+                if (!userData.name || !userData.password || (!userData.email && !userData.phone)) {
+                    results.failed.push({
+                        index: i,
+                        data: userData,
+                        error: 'Missing required fields (name, password, email/phone)'
+                    });
+                    continue;
+                }
+
+                // Hash password
+                const hashedPassword = await bcrypt.hash(userData.password, 12);
+                
+                // Generate referral code
+                let referralCode;
+                let attempts = 0;
+                do {
+                    referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+                    attempts++;
+                } while (await User.findOne({ referralCode }) && attempts < 10);
+
+                // Normalize data
+                const normalizedEmail = userData.email ? userData.email.toLowerCase().trim() : null;
+                let normalizedPhone = null;
+                
+                if (userData.phone) {
+                    let cleanPhone = userData.phone.replace(/[\s\-\(\)\+]/g, '');
+                    if (cleanPhone.startsWith('08')) {
+                        normalizedPhone = '628' + cleanPhone.substring(2);
+                    } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+                        normalizedPhone = '62' + cleanPhone;
+                    } else {
+                        normalizedPhone = cleanPhone;
+                    }
+                }
+
+                // Create user
+                const newUser = new User({
+                    name: userData.name.trim(),
+                    email: normalizedEmail,
+                    phone: normalizedPhone,
+                    password: hashedPassword,
+                    balance: parseFloat(userData.balance) || 0,
+                    accountType: userData.accountType || 'standard',
+                    isActive: userData.isActive !== false,
+                    referralCode,
+                    totalProfit: 0,
+                    totalLoss: 0,
+                    adminSettings: userData.adminSettings || {
+                        forceWin: false,
+                        forceWinRate: 0,
+                        profitCollapse: 'normal',
+                        profitPercentage: 80
+                    },
+                    stats: {
+                        totalTrades: 0,
+                        winTrades: 0,
+                        loseTrades: 0
+                    },
+                    bankData: userData.bankData || {
+                        bankName: '',
+                        accountNumber: '',
+                        accountHolder: ''
+                    }
+                });
+
+                const savedUser = await newUser.save();
+                
+                results.success.push({
+                    index: i,
+                    user: {
+                        _id: savedUser._id,
+                        name: savedUser.name,
+                        email: savedUser.email,
+                        phone: savedUser.phone,
+                        balance: savedUser.balance
+                    }
+                });
+
+            } catch (userError) {
+                results.failed.push({
+                    index: i,
+                    data: userData,
+                    error: userError.message
+                });
+            }
+        }
+
+        // Log activity
+        await logActivity(
+            req.userId, 
+            'ADMIN_BULK_USER_CREATE', 
+            `Bulk created users: ${results.success.length} success, ${results.failed.length} failed`,
+            req
+        );
+
+        res.status(201).json({
+            success: true,
+            message: `Bulk user creation completed: ${results.success.length}/${results.total} success`,
+            results
+        });
+
+        console.log(`✅ Bulk user creation: ${results.success.length}/${results.total} successful`);
+
+    } catch (error) {
+        console.error('❌ Bulk user creation error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Gagal membuat users secara bulk',
+            details: error.message
+        });
+    }
+});
+
+// ========================================
 // ✅ ENHANCED SOCKET.IO HANDLING
 // ========================================
 
