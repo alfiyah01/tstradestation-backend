@@ -1024,106 +1024,36 @@ function validateInput(data, requiredFields = []) {
 }
 
 // ========================================
-// ✅ ENHANCED DATABASE MIGRATION - PROTECT ADMIN USER
+// 🛡️ SAFE DATABASE MIGRATION - TIDAK MENGHAPUS DATA USER
 // ========================================
 
 async function runDatabaseMigration() {
     try {
-        console.log('🔄 Running database migration and cleanup...');
+        console.log('🔄 Running SAFE database migration...');
         
         const protectedEmails = ['admin@tradestation.com'];
         
-        console.log('📇 Dropping old indexes...');
+        // ✅ HANYA BUAT INDEX, JANGAN HAPUS DATA
+        console.log('📇 Creating indexes only...');
         try {
-            await User.collection.dropIndex('email_1');
-            console.log('📧 Dropped old email index');
-        } catch (e) {
-            console.log('📧 Email index not found (ok)');
+            await User.collection.createIndex({ email: 1 }, { background: true, sparse: true });
+            await User.collection.createIndex({ phone: 1 }, { background: true, sparse: true });
+            await User.collection.createIndex({ createdAt: -1 }, { background: true });
+            await User.collection.createIndex({ isActive: 1 }, { background: true });
+            console.log('✅ Indexes created safely');
+        } catch (indexError) {
+            console.log('📧 Index creation error (may already exist):', indexError.message);
         }
         
-        try {
-            await User.collection.dropIndex('phone_1');
-            console.log('📱 Dropped old phone index');
-        } catch (e) {
-            console.log('📱 Phone index not found (ok)');
-        }
-        
-        console.log('🧹 Cleaning invalid data...');
-        
-        const invalidEmailUsers = await User.find({
-            email: { $regex: /^[0-9+]/, $nin: protectedEmails }
-        });
-        
-        for (const user of invalidEmailUsers) {
-            console.log(`🗑️ Removing user with invalid email: ${user.email}`);
-            await User.deleteOne({ _id: user._id });
-        }
-        
-        const invalidPhoneUsers = await User.find({
-            phone: { $regex: /@/ },
-            email: { $nin: protectedEmails }
-        });
-        
-        for (const user of invalidPhoneUsers) {
-            console.log(`🗑️ Removing user with invalid phone: ${user.phone}`);
-            await User.deleteOne({ _id: user._id });
-        }
-        
-        console.log('🔄 Removing duplicate users (protecting admin)...');
-        
-        const duplicateEmails = await User.aggregate([
-            { $match: { 
-                email: { $ne: null, $ne: '', $nin: protectedEmails } 
-            }},
-            { $group: { 
-                _id: '$email', 
-                count: { $sum: 1 }, 
-                docs: { $push: { id: '$_id', createdAt: '$createdAt', name: '$name' } } 
-            }},
-            { $match: { count: { $gt: 1 } } }
-        ]);
-        
-        for (const duplicate of duplicateEmails) {
-            const sortedDocs = duplicate.docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-            const toRemove = sortedDocs.slice(1);
-            
-            console.log(`📧 Found ${duplicate.count} users with email: ${duplicate._id}`);
-            for (const doc of toRemove) {
-                console.log(`🗑️ Removing older duplicate: ${doc.name} (${doc.id})`);
-                await User.deleteOne({ _id: doc.id });
-            }
-        }
-        
-        const duplicatePhones = await User.aggregate([
-            { $match: { 
-                phone: { $ne: null, $ne: '' },
-                email: { $nin: protectedEmails }
-            }},
-            { $group: { 
-                _id: '$phone', 
-                count: { $sum: 1 }, 
-                docs: { $push: { id: '$_id', createdAt: '$createdAt', name: '$name' } } 
-            }},
-            { $match: { count: { $gt: 1 } } }
-        ]);
-        
-        for (const duplicate of duplicatePhones) {
-            const sortedDocs = duplicate.docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-            const toRemove = sortedDocs.slice(1);
-            
-            console.log(`📱 Found ${duplicate.count} users with phone: ${duplicate._id}`);
-            for (const doc of toRemove) {
-                console.log(`🗑️ Removing older duplicate: ${doc.name} (${doc.id})`);
-                await User.deleteOne({ _id: doc.id });
-            }
-        }
-        
-        console.log('🔄 Normalizing existing user data...');
+        // ✅ HANYA NORMALISASI DATA, JANGAN HAPUS
+        console.log('🔄 Normalizing existing user data (WITHOUT DELETION)...');
         const allUsers = await User.find();
+        let normalizedCount = 0;
         
         for (const user of allUsers) {
             let needsSave = false;
             
+            // ✅ TAMBAH MISSING FIELDS, JANGAN HAPUS USER
             if (!user.adminSettings) {
                 user.adminSettings = {
                     forceWin: false,
@@ -1152,6 +1082,7 @@ async function runDatabaseMigration() {
                 needsSave = true;
             }
             
+            // ✅ NORMALISASI PHONE TANPA HAPUS USER
             if (user.phone) {
                 let cleanPhone = user.phone.replace(/[\s\-\(\)\+]/g, '');
                 let normalizedPhone = cleanPhone;
@@ -1166,48 +1097,161 @@ async function runDatabaseMigration() {
                 
                 if (normalizedPhone !== user.phone) {
                     user.phone = normalizedPhone;
-                    console.log(`📱 Normalized phone: ${cleanPhone} → ${normalizedPhone}`);
-                    needsSave = true;
+                    console.log(`📱 Normalized phone: ${cleanPhone} → ${normalizedPhone} for user: ${user.name}`);
                 }
             }
             
+            // ✅ NORMALISASI EMAIL TANPA HAPUS USER
             if (user.email) {
                 const normalizedEmail = user.email.toLowerCase().trim();
                 if (normalizedEmail !== user.email) {
                     user.email = normalizedEmail;
-                    console.log(`📧 Normalized email: ${user.email} → ${normalizedEmail}`);
+                    console.log(`📧 Normalized email for user: ${user.name}`);
                     needsSave = true;
                 }
             }
             
             if (needsSave) {
-                await user.save();
+                try {
+                    await user.save();
+                    normalizedCount++;
+                } catch (saveError) {
+                    console.log(`⚠️ Could not normalize user ${user.name}: ${saveError.message}`);
+                }
             }
         }
-        
-        console.log('📇 Creating new indexes...');
-        await User.collection.createIndex({ email: 1 }, { background: true });
-        await User.collection.createIndex({ phone: 1 }, { background: true });
-        await User.collection.createIndex({ createdAt: -1 }, { background: true });
-        await User.collection.createIndex({ isActive: 1 }, { background: true });
-        console.log('✅ New indexes created');
         
         const totalUsers = await User.countDocuments();
         const emailUsers = await User.countDocuments({ email: { $ne: null, $ne: '' } });
         const phoneUsers = await User.countDocuments({ phone: { $ne: null, $ne: '' } });
         
-        console.log(`📊 Migration Statistics:`);
-        console.log(`   Total users: ${totalUsers}`);
+        console.log(`📊 SAFE Migration Statistics:`);
+        console.log(`   Total users: ${totalUsers} (PRESERVED)`);
         console.log(`   Email users: ${emailUsers}`);
         console.log(`   Phone users: ${phoneUsers}`);
-        console.log(`   Duplicate emails removed: ${duplicateEmails.length}`);
-        console.log(`   Duplicate phones removed: ${duplicatePhones.length}`);
+        console.log(`   Users normalized: ${normalizedCount}`);
+        console.log(`   ✅ NO USERS DELETED - ALL DATA PRESERVED`);
         
         return true;
         
     } catch (error) {
-        console.error('❌ Database migration error:', error);
+        console.error('❌ Safe migration error:', error);
         return false;
+    }
+}
+
+// ========================================
+// 🔍 FUNGSI UNTUK CEK DATA YANG HILANG
+// ========================================
+
+async function checkMissingUsers() {
+    try {
+        console.log('🔍 Checking for missing users...');
+        
+        // Cek apakah ada user dengan created date yang janggal
+        const recentUsers = await User.find()
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .select('name email phone createdAt')
+            .lean();
+            
+        console.log('📋 Recent users in database:');
+        recentUsers.forEach((user, index) => {
+            console.log(`   ${index + 1}. ${user.name} - ${user.email || user.phone} - ${user.createdAt}`);
+        });
+        
+        const totalUsers = await User.countDocuments();
+        console.log(`📊 Total users currently: ${totalUsers}`);
+        
+        // Cek apakah ada gap dalam tanggal registrasi
+        const oldestUser = await User.findOne().sort({ createdAt: 1 }).select('createdAt name');
+        const newestUser = await User.findOne().sort({ createdAt: -1 }).select('createdAt name');
+        
+        if (oldestUser && newestUser) {
+            console.log(`📅 Date range: ${oldestUser.createdAt} to ${newestUser.createdAt}`);
+            console.log(`👥 Oldest user: ${oldestUser.name}`);
+            console.log(`👥 Newest user: ${newestUser.name}`);
+        }
+        
+    } catch (error) {
+        console.error('❌ Error checking users:', error);
+    }
+}
+
+// ========================================
+// 🛡️ BACKUP FUNCTION SEBELUM MIGRATION
+// ========================================
+
+async function backupUsers() {
+    try {
+        console.log('💾 Creating user backup...');
+        
+        const allUsers = await User.find().lean();
+        const backupData = {
+            timestamp: new Date().toISOString(),
+            totalUsers: allUsers.length,
+            users: allUsers
+        };
+        
+        // Di production, simpan ke file atau external storage
+        console.log(`✅ Backup created: ${allUsers.length} users`);
+        console.log('💡 Backup data available in memory for recovery');
+        
+        return backupData;
+        
+    } catch (error) {
+        console.error('❌ Backup error:', error);
+        return null;
+    }
+}
+
+// ========================================
+// 📊 FUNGSI UNTUK CEK KESEHATAN DATABASE
+// ========================================
+
+async function checkDatabaseHealth() {
+    try {
+        console.log('🏥 Database Health Check:');
+        console.log('========================');
+        
+        const [userCount, depositCount, tradeCount, withdrawalCount] = await Promise.all([
+            User.countDocuments(),
+            Deposit.countDocuments(),
+            Trade.countDocuments(),
+            Withdrawal.countDocuments()
+        ]);
+        
+        console.log(`👥 Users: ${userCount}`);
+        console.log(`💰 Deposits: ${depositCount}`);
+        console.log(`📈 Trades: ${tradeCount}`);
+        console.log(`💸 Withdrawals: ${withdrawalCount}`);
+        
+        // Cek user tanpa email dan phone
+        const usersWithoutContact = await User.countDocuments({
+            $and: [
+                { $or: [{ email: null }, { email: '' }] },
+                { $or: [{ phone: null }, { phone: '' }] }
+            ]
+        });
+        
+        console.log(`⚠️ Users without contact info: ${usersWithoutContact}`);
+        
+        // Cek admin user
+        const adminUser = await User.findOne({ email: 'admin@tradestation.com' });
+        console.log(`👑 Admin user exists: ${adminUser ? 'YES' : 'NO'}`);
+        
+        return {
+            users: userCount,
+            deposits: depositCount,
+            trades: tradeCount,
+            withdrawals: withdrawalCount,
+            usersWithoutContact,
+            adminExists: !!adminUser
+        };
+        
+    } catch (error) {
+        console.error('❌ Health check error:', error);
+        return null;
     }
 }
 
