@@ -10,7 +10,9 @@ const socketIo = require('socket.io');
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', true);
+
+// ✅ TRUST PROXY AMAN UNTUK RAILWAY
+app.set('trust proxy', 1); // Trust first proxy only
 
 const server = http.createServer(app);
 
@@ -45,6 +47,9 @@ const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100,
     message: { error: 'Too many requests from this IP, please try again later.' }
+    validate: {
+        trustProxy: false // ✅ TAMBAHKAN INI UNTUK DISABLE WARNING
+    }
 });
 app.use('/api/', limiter);
 
