@@ -1331,6 +1331,794 @@ async function ensureIndexes() {
 }
 
 // ========================================
+// 📄 CONTRACT MANAGEMENT - BACKEND IMPLEMENTATION
+// ========================================
+
+// Tambahkan ke server.js setelah model-model yang sudah ada
+
+// Contract Template Schema
+const contractTemplateSchema = new mongoose.Schema({
+    title: { type: String, required: true, index: true },
+    version: { type: String, required: true, default: '1.0' },
+    content: { type: String, required: true }, // HTML content
+    isActive: { type: Boolean, default: true, index: true },
+    fields: [{
+        fieldName: { type: String, required: true }, // e.g., "clientName", "clientEmail"
+        fieldType: { type: String, enum: ['text', 'email', 'phone', 'date', 'signature'], default: 'text' },
+        placeholder: { type: String, default: '' },
+        isRequired: { type: Boolean, default: true }
+    }],
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    createdAt: { type: Date, default: Date.now, index: true },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+// Contract Instance Schema
+const contractInstanceSchema = new mongoose.Schema({
+    templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContractTemplate', required: true, index: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    contractNumber: { type: String, required: true, unique: true, index: true },
+    title: { type: String, required: true },
+    content: { type: String, required: true }, // Final content dengan data user
+    status: { 
+        type: String, 
+        enum: ['pending', 'signed', 'cancelled', 'expired'], 
+        default: 'pending',
+        index: true 
+    },
+    generatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    signedAt: { type: Date, index: true },
+    expiresAt: { type: Date, index: true },
+    
+    // Signature Data
+    signature: {
+        signatureData: { type: String }, // Base64 signature image
+        ipAddress: { type: String },
+        userAgent: { type: String },
+        timestamp: { type: Date }
+    },
+    
+    // Link Data
+    accessToken: { type: String, unique: true, index: true },
+    accessCount: { type: Number, default: 0 },
+    lastAccessAt: { type: Date },
+    
+    createdAt: { type: Date, default: Date.now, index: true },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+// Create indexes
+contractTemplateSchema.index({ isActive: 1, createdAt: -1 });
+contractInstanceSchema.index({ status: 1, createdAt: -1 });
+contractInstanceSchema.index({ userId: 1, status: 1 });
+contractInstanceSchema.index({ accessToken: 1 });
+
+const ContractTemplate = mongoose.model('ContractTemplate', contractTemplateSchema);
+const ContractInstance = mongoose.model('ContractInstance', contractInstanceSchema);
+
+// ========================================
+// 🛠️ HELPER FUNCTIONS
+// ========================================
+
+function generateContractNumber() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const timestamp = Date.now().toString().slice(-6);
+    
+    return `TS/CONTRACT/${year}/${month}/${day}/${timestamp}`;
+}
+
+function generateAccessToken() {
+    return require('crypto').randomBytes(32).toString('hex');
+}
+
+function replaceContractVariables(content, userData, contractData) {
+    let processedContent = content;
+    
+    // User variables
+    processedContent = processedContent.replace(/\{\{userName\}\}/g, userData.name || 'N/A');
+    processedContent = processedContent.replace(/\{\{userEmail\}\}/g, userData.email || 'N/A');
+    processedContent = processedContent.replace(/\{\{userPhone\}\}/g, userData.phone || 'N/A');
+    processedContent = processedContent.replace(/\{\{userBalance\}\}/g, formatCurrency(userData.balance) || 'Rp 0');
+    processedContent = processedContent.replace(/\{\{userReferralCode\}\}/g, userData.referralCode || 'N/A');
+    
+    // Contract variables
+    processedContent = processedContent.replace(/\{\{contractNumber\}\}/g, contractData.contractNumber);
+    processedContent = processedContent.replace(/\{\{contractDate\}\}/g, new Date().toLocaleDateString('id-ID'));
+    processedContent = processedContent.replace(/\{\{currentDate\}\}/g, new Date().toLocaleDateString('id-ID'));
+    processedContent = processedContent.replace(/\{\{currentYear\}\}/g, new Date().getFullYear());
+    
+    // Company variables
+    processedContent = processedContent.replace(/\{\{companyName\}\}/g, 'TradeStation');
+    processedContent = processedContent.replace(/\{\{companyAddress\}\}/g, 'Jakarta, Indonesia');
+    
+    return processedContent;
+}
+
+// ========================================
+// 📋 ADMIN CONTRACT TEMPLATE ENDPOINTS
+// ========================================
+
+// Get all contract templates
+app.get('/api/admin/contracts/templates', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { page = 1, limit = 20, search } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(50, Math.max(5, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+        
+        let query = {};
+        if (search && search.trim()) {
+            query = {
+                $or: [
+                    { title: { $regex: search.trim(), $options: 'i' } },
+                    { version: { $regex: search.trim(), $options: 'i' } }
+                ]
+            };
+        }
+        
+        const templates = await ContractTemplate.find(query)
+            .populate('createdBy', 'name email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean();
+        
+        const totalTemplates = await ContractTemplate.countDocuments(query);
+        
+        res.json({
+            success: true,
+            templates,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalTemplates,
+                pages: Math.ceil(totalTemplates / limitNum)
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get templates error:', error);
+        res.status(500).json({ error: 'Failed to get contract templates' });
+    }
+});
+
+// Create contract template
+app.post('/api/admin/contracts/templates', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { title, content, fields = [], isActive = true } = req.body;
+        
+        if (!title || !content) {
+            return res.status(400).json({ error: 'Title and content are required' });
+        }
+        
+        // Validate fields
+        const validatedFields = fields.map(field => ({
+            fieldName: field.fieldName,
+            fieldType: ['text', 'email', 'phone', 'date', 'signature'].includes(field.fieldType) 
+                ? field.fieldType : 'text',
+            placeholder: field.placeholder || '',
+            isRequired: Boolean(field.isRequired)
+        }));
+        
+        const template = new ContractTemplate({
+            title: title.trim(),
+            content: content.trim(),
+            fields: validatedFields,
+            isActive: Boolean(isActive),
+            createdBy: req.userId,
+            version: '1.0'
+        });
+        
+        await template.save();
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_CONTRACT_TEMPLATE_CREATE', 
+            `Created contract template: ${template.title}`, 
+            req
+        );
+        
+        res.status(201).json({
+            success: true,
+            message: 'Contract template created successfully',
+            template
+        });
+        
+        console.log(`✅ Contract template created: ${template.title}`);
+        
+    } catch (error) {
+        console.error('❌ Create template error:', error);
+        res.status(500).json({ error: 'Failed to create contract template' });
+    }
+});
+
+// Update contract template
+app.put('/api/admin/contracts/templates/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, content, fields, isActive } = req.body;
+        
+        const template = await ContractTemplate.findById(id);
+        if (!template) {
+            return res.status(404).json({ error: 'Contract template not found' });
+        }
+        
+        // Update fields
+        if (title) template.title = title.trim();
+        if (content) template.content = content.trim();
+        if (Array.isArray(fields)) template.fields = fields;
+        if (typeof isActive === 'boolean') template.isActive = isActive;
+        
+        template.updatedAt = new Date();
+        await template.save();
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_CONTRACT_TEMPLATE_UPDATE', 
+            `Updated contract template: ${template.title}`, 
+            req
+        );
+        
+        res.json({
+            success: true,
+            message: 'Contract template updated successfully',
+            template
+        });
+        
+        console.log(`✅ Contract template updated: ${template.title}`);
+        
+    } catch (error) {
+        console.error('❌ Update template error:', error);
+        res.status(500).json({ error: 'Failed to update contract template' });
+    }
+});
+
+// Delete contract template
+app.delete('/api/admin/contracts/templates/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const template = await ContractTemplate.findById(id);
+        if (!template) {
+            return res.status(404).json({ error: 'Contract template not found' });
+        }
+        
+        // Check if template is being used
+        const activeContracts = await ContractInstance.countDocuments({ 
+            templateId: id, 
+            status: { $in: ['pending', 'signed'] } 
+        });
+        
+        if (activeContracts > 0) {
+            return res.status(400).json({ 
+                error: `Cannot delete template. ${activeContracts} active contracts are using this template.` 
+            });
+        }
+        
+        await ContractTemplate.findByIdAndDelete(id);
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_CONTRACT_TEMPLATE_DELETE', 
+            `Deleted contract template: ${template.title}`, 
+            req
+        );
+        
+        res.json({
+            success: true,
+            message: 'Contract template deleted successfully'
+        });
+        
+        console.log(`✅ Contract template deleted: ${template.title}`);
+        
+    } catch (error) {
+        console.error('❌ Delete template error:', error);
+        res.status(500).json({ error: 'Failed to delete contract template' });
+    }
+});
+
+// ========================================
+// 📋 ADMIN CONTRACT INSTANCE ENDPOINTS
+// ========================================
+
+// Get all contract instances
+app.get('/api/admin/contracts/instances', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { page = 1, limit = 20, status, userId } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(50, Math.max(5, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+        
+        let query = {};
+        if (status && ['pending', 'signed', 'cancelled', 'expired'].includes(status)) {
+            query.status = status;
+        }
+        if (userId) {
+            query.userId = userId;
+        }
+        
+        const contracts = await ContractInstance.find(query)
+            .populate('userId', 'name email phone')
+            .populate('templateId', 'title version')
+            .populate('generatedBy', 'name email')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean();
+        
+        const totalContracts = await ContractInstance.countDocuments(query);
+        
+        res.json({
+            success: true,
+            contracts,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalContracts,
+                pages: Math.ceil(totalContracts / limitNum)
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Get contract instances error:', error);
+        res.status(500).json({ error: 'Failed to get contract instances' });
+    }
+});
+
+// Generate contract for user
+app.post('/api/admin/contracts/generate', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { templateId, userId, expiryDays = 30 } = req.body;
+        
+        if (!templateId || !userId) {
+            return res.status(400).json({ error: 'Template ID and User ID are required' });
+        }
+        
+        const template = await ContractTemplate.findById(templateId);
+        if (!template || !template.isActive) {
+            return res.status(404).json({ error: 'Active contract template not found' });
+        }
+        
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Check if user already has pending contract for this template
+        const existingContract = await ContractInstance.findOne({
+            templateId,
+            userId,
+            status: 'pending'
+        });
+        
+        if (existingContract) {
+            return res.status(400).json({ 
+                error: 'User already has a pending contract for this template',
+                existingContract: {
+                    contractNumber: existingContract.contractNumber,
+                    createdAt: existingContract.createdAt
+                }
+            });
+        }
+        
+        // Generate contract
+        const contractNumber = generateContractNumber();
+        const accessToken = generateAccessToken();
+        const expiresAt = new Date(Date.now() + (expiryDays * 24 * 60 * 60 * 1000));
+        
+        const processedContent = replaceContractVariables(template.content, user, { contractNumber });
+        
+        const contractInstance = new ContractInstance({
+            templateId,
+            userId,
+            contractNumber,
+            title: template.title,
+            content: processedContent,
+            generatedBy: req.userId,
+            accessToken,
+            expiresAt
+        });
+        
+        await contractInstance.save();
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_CONTRACT_GENERATE', 
+            `Generated contract ${contractNumber} for user ${user.name}`, 
+            req
+        );
+        
+        // Generate access link
+        const contractLink = `${process.env.FRONTEND_URL || 'https://ts-traderstation.com'}/contract/${accessToken}`;
+        
+        res.status(201).json({
+            success: true,
+            message: 'Contract generated successfully',
+            contract: {
+                _id: contractInstance._id,
+                contractNumber: contractInstance.contractNumber,
+                accessToken: contractInstance.accessToken,
+                contractLink,
+                expiresAt: contractInstance.expiresAt
+            },
+            user: {
+                name: user.name,
+                email: user.email,
+                phone: user.phone
+            }
+        });
+        
+        console.log(`✅ Contract generated: ${contractNumber} for user ${user.name}`);
+        
+    } catch (error) {
+        console.error('❌ Generate contract error:', error);
+        res.status(500).json({ error: 'Failed to generate contract' });
+    }
+});
+
+// Get contract instance details
+app.get('/api/admin/contracts/instances/:id', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const contract = await ContractInstance.findById(id)
+            .populate('userId', 'name email phone balance')
+            .populate('templateId', 'title version')
+            .populate('generatedBy', 'name email')
+            .lean();
+        
+        if (!contract) {
+            return res.status(404).json({ error: 'Contract not found' });
+        }
+        
+        res.json({
+            success: true,
+            contract
+        });
+        
+    } catch (error) {
+        console.error('❌ Get contract details error:', error);
+        res.status(500).json({ error: 'Failed to get contract details' });
+    }
+});
+
+// Cancel contract instance
+app.patch('/api/admin/contracts/instances/:id/cancel', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        
+        const contract = await ContractInstance.findById(id).populate('userId', 'name');
+        if (!contract) {
+            return res.status(404).json({ error: 'Contract not found' });
+        }
+        
+        if (contract.status !== 'pending') {
+            return res.status(400).json({ error: 'Can only cancel pending contracts' });
+        }
+        
+        contract.status = 'cancelled';
+        contract.updatedAt = new Date();
+        await contract.save();
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_CONTRACT_CANCEL', 
+            `Cancelled contract ${contract.contractNumber} for user ${contract.userId?.name}. Reason: ${reason || 'No reason provided'}`, 
+            req
+        );
+        
+        res.json({
+            success: true,
+            message: 'Contract cancelled successfully'
+        });
+        
+        console.log(`✅ Contract cancelled: ${contract.contractNumber}`);
+        
+    } catch (error) {
+        console.error('❌ Cancel contract error:', error);
+        res.status(500).json({ error: 'Failed to cancel contract' });
+    }
+});
+
+// ========================================
+// 📋 USER CONTRACT ENDPOINTS
+// ========================================
+
+// Get contract by access token (for user)
+app.get('/api/contracts/:token', async (req, res) => {
+    try {
+        const { token } = req.params;
+        
+        const contract = await ContractInstance.findOne({ accessToken: token })
+            .populate('userId', 'name email phone')
+            .populate('templateId', 'title version')
+            .lean();
+        
+        if (!contract) {
+            return res.status(404).json({ error: 'Contract not found or invalid link' });
+        }
+        
+        // Check if contract is expired
+        if (contract.expiresAt && new Date() > contract.expiresAt) {
+            if (contract.status === 'pending') {
+                await ContractInstance.findByIdAndUpdate(contract._id, { 
+                    status: 'expired',
+                    updatedAt: new Date()
+                });
+            }
+            return res.status(410).json({ error: 'Contract link has expired' });
+        }
+        
+        // Update access count
+        await ContractInstance.findByIdAndUpdate(contract._id, {
+            $inc: { accessCount: 1 },
+            lastAccessAt: new Date()
+        });
+        
+        // Don't send sensitive data
+        const publicContract = {
+            _id: contract._id,
+            contractNumber: contract.contractNumber,
+            title: contract.title,
+            content: contract.content,
+            status: contract.status,
+            signedAt: contract.signedAt,
+            expiresAt: contract.expiresAt,
+            createdAt: contract.createdAt,
+            user: contract.userId,
+            template: contract.templateId,
+            hasSignature: !!contract.signature?.signatureData
+        };
+        
+        res.json({
+            success: true,
+            contract: publicContract
+        });
+        
+    } catch (error) {
+        console.error('❌ Get contract by token error:', error);
+        res.status(500).json({ error: 'Failed to get contract' });
+    }
+});
+
+// Authenticate user for contract signing
+app.post('/api/contracts/:token/authenticate', async (req, res) => {
+    try {
+        const { token } = req.params;
+        const { identifier, password } = req.body; // identifier can be email or phone
+        
+        if (!identifier || !password) {
+            return res.status(400).json({ error: 'Email/Phone and password are required' });
+        }
+        
+        const contract = await ContractInstance.findOne({ accessToken: token })
+            .populate('userId')
+            .lean();
+        
+        if (!contract) {
+            return res.status(404).json({ error: 'Invalid contract link' });
+        }
+        
+        if (contract.status !== 'pending') {
+            return res.status(400).json({ error: 'Contract is not available for signing' });
+        }
+        
+        // Check if contract is expired
+        if (contract.expiresAt && new Date() > contract.expiresAt) {
+            return res.status(410).json({ error: 'Contract link has expired' });
+        }
+        
+        const user = contract.userId;
+        
+        // Verify user credentials
+        const isEmailMatch = user.email && user.email.toLowerCase() === identifier.toLowerCase();
+        const isPhoneMatch = user.phone && (user.phone === identifier || user.phone === normalizePhone(identifier));
+        
+        if (!isEmailMatch && !isPhoneMatch) {
+            return res.status(401).json({ error: 'Invalid credentials for this contract' });
+        }
+        
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        
+        if (!user.isActive) {
+            return res.status(403).json({ error: 'Account is deactivated' });
+        }
+        
+        // Generate temporary token for contract session
+        const contractToken = jwt.sign(
+            { 
+                userId: user._id, 
+                contractId: contract._id,
+                purpose: 'contract_signing'
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+        
+        res.json({
+            success: true,
+            message: 'Authentication successful',
+            contractToken,
+            user: {
+                name: user.name,
+                email: user.email,
+                phone: user.phone
+            }
+        });
+        
+        console.log(`✅ User authenticated for contract: ${user.name} - ${contract.contractNumber}`);
+        
+    } catch (error) {
+        console.error('❌ Contract authentication error:', error);
+        res.status(500).json({ error: 'Authentication failed' });
+    }
+});
+
+// Sign contract
+app.post('/api/contracts/:token/sign', async (req, res) => {
+    try {
+        const { token } = req.params;
+        const { signatureData, contractToken } = req.body;
+        
+        if (!signatureData || !contractToken) {
+            return res.status(400).json({ error: 'Signature and authentication token are required' });
+        }
+        
+        // Verify contract token
+        let decodedToken;
+        try {
+            decodedToken = jwt.verify(contractToken, process.env.JWT_SECRET);
+            if (decodedToken.purpose !== 'contract_signing') {
+                throw new Error('Invalid token purpose');
+            }
+        } catch (tokenError) {
+            return res.status(401).json({ error: 'Invalid or expired authentication token' });
+        }
+        
+        const contract = await ContractInstance.findOne({ 
+            accessToken: token,
+            _id: decodedToken.contractId
+        }).populate('userId', 'name');
+        
+        if (!contract) {
+            return res.status(404).json({ error: 'Contract not found' });
+        }
+        
+        if (contract.status !== 'pending') {
+            return res.status(400).json({ error: 'Contract is not available for signing' });
+        }
+        
+        if (contract.userId._id.toString() !== decodedToken.userId) {
+            return res.status(403).json({ error: 'User mismatch' });
+        }
+        
+        // Validate signature data (should be base64 image)
+        if (!signatureData.startsWith('data:image/') || signatureData.length > 500000) {
+            return res.status(400).json({ error: 'Invalid signature format or size too large' });
+        }
+        
+        // Update contract with signature
+        contract.signature = {
+            signatureData,
+            ipAddress: req.ip || req.connection.remoteAddress,
+            userAgent: req.get('User-Agent'),
+            timestamp: new Date()
+        };
+        contract.status = 'signed';
+        contract.signedAt = new Date();
+        contract.updatedAt = new Date();
+        
+        await contract.save();
+        
+        await logActivity(
+            contract.userId._id, 
+            'CONTRACT_SIGNED', 
+            `Contract ${contract.contractNumber} signed digitally`, 
+            req
+        );
+        
+        res.json({
+            success: true,
+            message: 'Contract signed successfully',
+            contractNumber: contract.contractNumber,
+            signedAt: contract.signedAt
+        });
+        
+        console.log(`✅ Contract signed: ${contract.contractNumber} by ${contract.userId.name}`);
+        
+    } catch (error) {
+        console.error('❌ Contract signing error:', error);
+        res.status(500).json({ error: 'Failed to sign contract' });
+    }
+});
+
+// ========================================
+// 📊 CONTRACT STATISTICS
+// ========================================
+
+app.get('/api/admin/contracts/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const [
+            totalTemplates,
+            activeTemplates,
+            totalContracts,
+            pendingContracts,
+            signedContracts,
+            expiredContracts,
+            cancelledContracts
+        ] = await Promise.all([
+            ContractTemplate.countDocuments(),
+            ContractTemplate.countDocuments({ isActive: true }),
+            ContractInstance.countDocuments(),
+            ContractInstance.countDocuments({ status: 'pending' }),
+            ContractInstance.countDocuments({ status: 'signed' }),
+            ContractInstance.countDocuments({ status: 'expired' }),
+            ContractInstance.countDocuments({ status: 'cancelled' })
+        ]);
+        
+        // Recent activity
+        const recentContracts = await ContractInstance.find()
+            .populate('userId', 'name')
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .lean();
+        
+        const stats = {
+            templates: {
+                total: totalTemplates,
+                active: activeTemplates
+            },
+            contracts: {
+                total: totalContracts,
+                pending: pendingContracts,
+                signed: signedContracts,
+                expired: expiredContracts,
+                cancelled: cancelledContracts
+            },
+            recentContracts: recentContracts.map(contract => ({
+                contractNumber: contract.contractNumber,
+                title: contract.title,
+                status: contract.status,
+                userName: contract.userId?.name || 'Unknown',
+                createdAt: contract.createdAt,
+                signedAt: contract.signedAt
+            }))
+        };
+        
+        res.json({
+            success: true,
+            stats
+        });
+        
+    } catch (error) {
+        console.error('❌ Contract stats error:', error);
+        res.status(500).json({ error: 'Failed to get contract statistics' });
+    }
+});
+
+console.log('✅ Contract Management API endpoints added successfully');
+console.log('📋 Available endpoints:');
+console.log('   • GET /api/admin/contracts/templates - Get all templates');
+console.log('   • POST /api/admin/contracts/templates - Create template');
+console.log('   • PUT /api/admin/contracts/templates/:id - Update template');
+console.log('   • DELETE /api/admin/contracts/templates/:id - Delete template');
+console.log('   • GET /api/admin/contracts/instances - Get all contracts');
+console.log('   • POST /api/admin/contracts/generate - Generate contract for user');
+console.log('   • GET /api/admin/contracts/instances/:id - Get contract details');
+console.log('   • PATCH /api/admin/contracts/instances/:id/cancel - Cancel contract');
+console.log('   • GET /api/contracts/:token - Get contract by token (public)');
+console.log('   • POST /api/contracts/:token/authenticate - Authenticate user');
+console.log('   • POST /api/contracts/:token/sign - Sign contract');
+console.log('   • GET /api/admin/contracts/stats - Get contract statistics');
+
+// ========================================
 // PUBLIC ROUTES
 // ========================================
 
