@@ -10,6 +10,8 @@ const socketIo = require('socket.io');
 require('dotenv').config();
 
 const app = express();
+app.set('trust proxy', true);
+
 const server = http.createServer(app);
 
 // Socket.IO setup dengan CORS
