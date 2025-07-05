@@ -128,6 +128,12 @@ const userSchema = new mongoose.Schema({
     adminSettings: {
         forceWin: { type: Boolean, default: false },
         forceWinRate: { type: Number, default: 0, min: 0, max: 100 },
+        forceWinAmount: { type: Number, default: 0, min: 0 },
+        forceWinMode: { 
+            type: String, 
+            enum: ['percentage', 'fixed_amount'], 
+            default: 'percentage' 
+        }, 
         profitCollapse: { 
             type: String, 
             enum: ['profit', 'collapse', 'normal'], 
@@ -814,18 +820,41 @@ function checkTradesToComplete() {
                         
                         trade.result = result;
                         
-                        const profitPercentage = Math.max(20, Math.min(100, 
-                            trade.profitPercentage || 
-                            trade.userId.adminSettings?.profitPercentage || 
-                            80
-                        ));
-                        
+                        // 🆕 UPDATE PAYOUT CALCULATION WITH FIXED AMOUNT SUPPORT
                         if (result === 'win') {
-                            const profitAmount = trade.amount * profitPercentage / 100;
-                            trade.payout = trade.amount + profitAmount;
-                            trade.userId.balance += trade.payout;
-                            trade.userId.totalProfit += profitAmount;
+                            let finalPayout;
+                            let actualProfit;
+                            
+                            // 🆕 CEK FORCE WIN MODE
+                            if (trade.userId.adminSettings?.forceWinMode === 'fixed_amount' && 
+                                trade.userId.adminSettings?.forceWinAmount > 0) {
+                                
+                                // 🆕 FIXED AMOUNT MODE - nominal tetap
+                                actualProfit = trade.userId.adminSettings.forceWinAmount;
+                                finalPayout = trade.amount + actualProfit;
+                                
+                                console.log(`🎯 Fixed amount win: ${formatCurrency(actualProfit)} for user ${trade.userId.name}`);
+                                
+                            } else {
+                                // PERCENTAGE MODE - yang lama
+                                const profitPercentage = Math.max(20, Math.min(100, 
+                                    trade.profitPercentage || 
+                                    trade.userId.adminSettings?.profitPercentage || 
+                                    80
+                                ));
+                                
+                                actualProfit = trade.amount * profitPercentage / 100;
+                                finalPayout = trade.amount + actualProfit;
+                                
+                                console.log(`📊 Percentage win: ${profitPercentage}% = ${formatCurrency(actualProfit)} for user ${trade.userId.name}`);
+                            }
+                            
+                            trade.payout = finalPayout;
+                            trade.userId.balance += finalPayout;
+                            trade.userId.totalProfit += actualProfit;
+                            
                         } else {
+                            // Lose case remains same
                             trade.payout = 0;
                             trade.userId.totalLoss += trade.amount;
                         }
@@ -840,10 +869,15 @@ function checkTradesToComplete() {
                         await trade.save();
                         await trade.userId.save();
                         
+                        // 🆕 UPDATE LOG MESSAGE WITH MODE INFO
+                        const modeInfo = trade.userId.adminSettings?.forceWinMode === 'fixed_amount' ? 
+                            `(Fixed Amount: ${formatCurrency(trade.userId.adminSettings.forceWinAmount)})` : 
+                            '';
+                        
                         await logActivity(
                             trade.userId._id, 
                             'TRADE_COMPLETED', 
-                            `${trade.symbol} ${trade.direction.toUpperCase()} ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''}`
+                            `${trade.symbol} ${trade.direction.toUpperCase()} ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''} ${modeInfo}`
                         );
                         
                         io.to(trade.userId._id.toString()).emit('tradeCompleted', {
@@ -861,7 +895,7 @@ function checkTradesToComplete() {
                             newBalance: trade.userId.balance
                         });
                         
-                        console.log(`✅ Trade completed: ${trade._id} - ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''}`);
+                        console.log(`✅ Trade completed: ${trade._id} - ${result.toUpperCase()} - ${formatCurrency(trade.payout)} ${trade.adminForced ? '(Admin Controlled)' : ''} ${modeInfo}`);
                     }
                 }
             }
