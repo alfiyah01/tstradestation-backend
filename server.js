@@ -177,9 +177,19 @@ userSchema.pre('save', function(next) {
         this.adminSettings = {
             forceWin: false,
             forceWinRate: 0,
+            forceWinMode: 'percentage',
+            forceWinAmount: 0,
             profitCollapse: 'normal',
             profitPercentage: 80
         };
+    }
+
+    // ✅ TAMBAH VALIDASI UNTUK MISSING FIELDS
+    if (this.adminSettings.forceWinMode === undefined) {
+        this.adminSettings.forceWinMode = 'percentage';
+    }
+    if (this.adminSettings.forceWinAmount === undefined) {
+        this.adminSettings.forceWinAmount = 0;
     }
     
     if (!this.stats) {
@@ -440,6 +450,8 @@ async function createAdminUser() {
                     profitPercentage: 80,
                     forceWin: false,
                     forceWinRate: 0
+                    forceWinMode: 'percentage',
+                    forceWinAmount: 0,
                 },
                 stats: {
                     totalTrades: 0,
@@ -481,6 +493,8 @@ async function createAdminUser() {
                 adminUser.adminSettings = {
                     profitCollapse: 'normal',
                     profitPercentage: 80,
+                    forceWinMode: 'percentage',
+                    forceWinAmount: 0,
                     forceWin: false,
                     forceWinRate: 0
                 };
@@ -689,6 +703,23 @@ function generateCandleFromPrice(symbol, timeframe, currentPrice, previousCandle
         console.error('❌ Error generating candle:', error);
         return null;
     }
+}
+
+function standardResponse(res, success = true, data = null, message = '', statusCode = 200) {
+    const response = {
+        success,
+        timestamp: new Date().toISOString()
+    };
+    
+    if (success) {
+        response.message = message || 'Operation successful';
+        if (data) response.data = data;
+    } else {
+        response.error = message || 'Operation failed';
+        if (data) response.details = data;
+    }
+    
+    return res.status(statusCode).json(response);
 }
 
 async function generateHistoricalData(symbol, timeframe, count = 100) {
@@ -1202,6 +1233,8 @@ async function runDatabaseMigration() {
                 user.adminSettings = {
                     forceWin: false,
                     forceWinRate: 0,
+                    forceWinMode: 'percentage',
+                    forceWinAmount: 0,
                     profitCollapse: 'normal',
                     profitPercentage: 80
                 };
@@ -1264,6 +1297,33 @@ async function runDatabaseMigration() {
                 }
             }
         }
+
+        // ✅ ADD MISSING FIELDS TO EXISTING USERS
+        console.log('🔄 Adding missing adminSettings fields...');
+        const usersToUpdate = await User.find({
+            $or: [
+                { 'adminSettings.forceWinMode': { $exists: false } },
+                { 'adminSettings.forceWinAmount': { $exists: false } }
+            ]
+        });
+
+        for (const user of usersToUpdate) {
+            if (!user.adminSettings.forceWinMode) {
+                user.adminSettings.forceWinMode = 'percentage';
+            }
+            if (user.adminSettings.forceWinAmount === undefined) {
+                user.adminSettings.forceWinAmount = 0;
+            }
+            
+            try {
+                await user.save();
+                console.log(`✅ Updated adminSettings for user: ${user.name}`);
+            } catch (error) {
+                console.log(`⚠️ Could not update user ${user.name}: ${error.message}`);
+            }
+        }
+
+        console.log(`✅ Updated ${usersToUpdate.length} users with missing adminSettings fields`);
         
         const totalUsers = await User.countDocuments();
         const emailUsers = await User.countDocuments({ email: { $ne: null, $ne: '' } });
@@ -1596,6 +1656,37 @@ app.post('/api/admin/debug/reset', async (req, res) => {
         });
     }
 });
+
+app.get('/api/admin/debug/force-win-test', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const users = await User.find()
+            .select('name adminSettings')
+            .limit(5)
+            .lean();
+        
+        const testData = users.map(user => ({
+            name: user.name,
+            adminSettings: user.adminSettings,
+            hasForceWinMode: !!user.adminSettings?.forceWinMode,
+            hasForceWinAmount: user.adminSettings?.forceWinAmount !== undefined
+        }));
+        
+        res.json({
+            success: true,
+            message: 'Force win amount test data',
+            testData,
+            allFieldsPresent: testData.every(u => u.hasForceWinMode && u.hasForceWinAmount)
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+console.log('🧪 Force win amount test endpoint added: /api/admin/debug/force-win-test');
 
 // Chart data route
 app.get('/api/chart/:symbol/:timeframe', async (req, res) => {
@@ -2481,6 +2572,8 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
                 profitPercentage: 80,
                 forceWin: false,
                 forceWinRate: 0
+                forceWinMode: 'percentage',
+                forceWinAmount: 0,
             },
             stats: user.stats || {
                 totalTrades: 0,
@@ -2554,6 +2647,21 @@ app.put('/api/admin/user/:id', authenticateToken, requireAdmin, async (req, res)
                     return res.status(400).json({ error: 'Win rate must be between 0 and 100' });
                 }
                 updateData.adminSettings.forceWinRate = winRate;
+            }
+
+            if (forceWinMode !== undefined) {
+                if (!['percentage', 'fixed_amount'].includes(forceWinMode)) {
+                    return res.status(400).json({ error: 'Force win mode must be percentage or fixed_amount' });
+                }
+                updateData.adminSettings.forceWinMode = forceWinMode;
+            }
+            
+            if (forceWinAmount !== undefined) {
+                const amount = parseFloat(forceWinAmount);
+                if (isNaN(amount) || amount < 0) {
+                    return res.status(400).json({ error: 'Force win amount must be a positive number' });
+                }
+                updateData.adminSettings.forceWinAmount = amount;
             }
             
             if (profitCollapse && !['normal', 'profit', 'collapse'].includes(profitCollapse)) {
@@ -3756,6 +3864,8 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
             adminSettings = {
                 forceWin: false,
                 forceWinRate: 0,
+                forceWinMode: 'percentage',
+                forceWinAmount: 0,
                 profitCollapse: 'normal',
                 profitPercentage: 80
             },
@@ -3901,6 +4011,9 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
             adminSettings: {
                 forceWin: Boolean(adminSettings.forceWin),
                 forceWinRate: Math.max(0, Math.min(100, parseFloat(adminSettings.forceWinRate) || 0)),
+                forceWinMode: ['percentage', 'fixed_amount'].includes(adminSettings.forceWinMode) 
+                    ? adminSettings.forceWinMode : 'percentage',
+                forceWinAmount: Math.max(0, parseFloat(adminSettings.forceWinAmount) || 0),
                 profitCollapse: ['normal', 'profit', 'collapse'].includes(adminSettings.profitCollapse) 
                     ? adminSettings.profitCollapse : 'normal',
                 profitPercentage: Math.max(20, Math.min(100, parseInt(adminSettings.profitPercentage) || 80))
@@ -4074,6 +4187,8 @@ app.post('/api/admin/users/bulk', authenticateToken, requireAdmin, async (req, r
                     adminSettings: userData.adminSettings || {
                         forceWin: false,
                         forceWinRate: 0,
+                        forceWinMode: 'percentage',
+                        forceWinAmount: 0,
                         profitCollapse: 'normal',
                         profitPercentage: 80
                     },
