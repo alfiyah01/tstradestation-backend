@@ -449,7 +449,7 @@ async function createAdminUser() {
                     profitCollapse: 'normal',
                     profitPercentage: 80,
                     forceWin: false,
-                    forceWinRate: 0
+                    forceWinRate: 0,
                     forceWinMode: 'percentage',
                     forceWinAmount: 0,
                 },
@@ -496,7 +496,7 @@ async function createAdminUser() {
                     forceWinMode: 'percentage',
                     forceWinAmount: 0,
                     forceWin: false,
-                    forceWinRate: 0
+                    forceWinRate: 0,
                 };
                 needsUpdate = true;
             }
@@ -2571,7 +2571,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
                 profitCollapse: 'normal',
                 profitPercentage: 80,
                 forceWin: false,
-                forceWinRate: 0
+                forceWinRate: 0,
                 forceWinMode: 'percentage',
                 forceWinAmount: 0,
             },
