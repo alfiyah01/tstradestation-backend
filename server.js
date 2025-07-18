@@ -19,7 +19,7 @@ const server = http.createServer(app);
 // Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+        origin: ["https://ts-tradestation.netlify.app", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -33,7 +33,7 @@ app.use(helmet({
 }));
 
 app.use(cors({
-    origin: ["https://ts-traderstation.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+    origin: ["https://ts-tradestation.netlify.app", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization']
@@ -1778,7 +1778,7 @@ app.post('/api/admin/contracts/generate', authenticateToken, requireAdmin, async
         );
         
         // Generate access link
-        const contractLink = `${process.env.FRONTEND_URL || 'https://ts-traderstation.com'}/contract/${accessToken}`;
+        const contractLink = `${process.env.FRONTEND_URL || 'https://ts-tradestation.netlify.app'}/contract/${accessToken}`;
         
         res.status(201).json({
             success: true,
