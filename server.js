@@ -68,20 +68,20 @@ const userSchema = new mongoose.Schema({
         required: true, 
         trim: true, 
         minlength: 2,
-        index: true  // ✅ ADDED INDEX
+        index: true
     },
     email: { 
         type: String, 
         trim: true, 
         lowercase: true, 
         default: null,
-        index: true  // ✅ ADDED INDEX
+        index: true
     },
     phone: { 
         type: String, 
         trim: true, 
         default: null,
-        index: true  // ✅ ADDED INDEX
+        index: true
     },
     password: { 
         type: String, 
@@ -92,18 +92,18 @@ const userSchema = new mongoose.Schema({
         type: Number, 
         default: 0, 
         min: 0,
-        index: true  // ✅ ADDED INDEX
+        index: true
     },
     accountType: { 
         type: String, 
         enum: ['standard', 'premium'], 
         default: 'standard',
-        index: true  // ✅ ADDED INDEX
+        index: true
     },
     isActive: { 
         type: Boolean, 
         default: true,
-        index: true  // ✅ ADDED INDEX
+        index: true
     },
     totalProfit: { 
         type: Number, 
@@ -116,7 +116,15 @@ const userSchema = new mongoose.Schema({
     referralCode: { 
         type: String, 
         unique: true,
-        index: true  // ✅ ADDED INDEX
+        index: true
+    },
+    // 🆕 TAX STATUS - TAMBAHKAN INI
+    taxStatus: {
+        isPaid: { type: Boolean, default: false },
+        amount: { type: Number, default: 0 },
+        paidAt: { type: Date },
+        confirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        notes: { type: String, default: '' }
     },
     // Bank Data untuk Withdrawal
     bankData: {
@@ -2760,8 +2768,10 @@ app.post('/api/trade', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Direction must be buy or sell' });
         }
         
-        if (amount < 500000 || amount > 100000000) {
-            return res.status(400).json({ error: 'Amount must be between Rp 500,000 and Rp 100,000,000' });
+        if (amount < 500000 || amount > 1000000000) {
+            return res.status(400).json({ 
+                error: 'Amount must be between Rp 500,000 and Rp 1,000,000,000 (1 Miliar)' 
+            });
         }
         
         if (duration < 30 || duration > 300) {
@@ -2963,7 +2973,35 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
         }
         
         if (!user.bankData || !user.bankData.bankName) {
-            return res.status(400).json({ error: 'Bank data is required. Please update your bank information first.' });
+            return res.status(400).json({ 
+                error: 'Bank data is required. Please update your bank information first.' 
+            });
+        }
+        
+        // 🆕 TAX VALIDATION - TAMBAHKAN INI
+        const currentProfit = user.totalProfit || 0;
+        const requiresTax = currentProfit > 50000000; // 50 juta
+        const hasPaidTax = user.taxStatus?.isPaid || false;
+        
+        if (requiresTax && !hasPaidTax) {
+            const taxAmount = currentProfit * 0.1; // 10%
+            
+            return res.status(400).json({ 
+                error: 'Penarikan tidak dapat diproses',
+                message: 'Anda belum melakukan pembayaran pajak penghasilan',
+                details: {
+                    totalProfit: formatCurrency(currentProfit),
+                    taxRequired: formatCurrency(taxAmount),
+                    taxPercentage: '10%',
+                    instruction: 'Silakan konfirmasi pembayaran pajak melalui CS TradeStation dan Livechat terlebih dahulu'
+                },
+                taxInfo: {
+                    required: true,
+                    amount: taxAmount,
+                    percentage: 10,
+                    reason: 'Profit melebihi Rp 50,000,000'
+                }
+            });
         }
         
         const feePercentage = 0.01;
@@ -3029,6 +3067,97 @@ app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     }
 });
 
+app.get('/api/withdrawal/info', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId).select('balance totalProfit taxStatus bankData');
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const currentProfit = user.totalProfit || 0;
+        const requiresTax = currentProfit > 50000000; // 50 juta
+        const taxAmount = requiresTax ? currentProfit * 0.1 : 0; // 10% pajak
+        const hasPaidTax = user.taxStatus?.isPaid || false;
+        
+        // Cek apakah withdrawal bisa diproses
+        const canWithdraw = !requiresTax || hasPaidTax;
+        
+        const withdrawalInfo = {
+            balance: user.balance,
+            totalProfit: currentProfit,
+            requiresTax,
+            taxAmount,
+            hasPaidTax,
+            canWithdraw,
+            minimumWithdrawal: 100000,
+            feePercentage: 1, // 1%
+            minimumFee: 6500,
+            bankDataComplete: !!(user.bankData?.bankName && user.bankData?.accountNumber && user.bankData?.accountHolder),
+            notes: [
+                "Minimum penarikan Rp 100,000",
+                "Biaya admin 1% (minimum Rp 6,500)",
+                "Penarikan dengan profit di atas Rp 50,000,000 dikenakan pajak penghasilan 10%",
+                "Pajak harus dibayar melalui konfirmasi CS TradeStation dan Livechat sebelum penarikan diproses"
+            ],
+            taxInfo: requiresTax ? {
+                message: hasPaidTax 
+                    ? "Pajak sudah dibayar, penarikan dapat diproses"
+                    : "Anda memiliki profit di atas Rp 50,000,000. Harap konfirmasi pembayaran pajak 10% melalui CS TradeStation dan Livechat sebelum melakukan penarikan.",
+                taxAmount: taxAmount,
+                paidAt: user.taxStatus?.paidAt,
+                notes: user.taxStatus?.notes
+            } : null
+        };
+        
+        res.json(withdrawalInfo);
+        
+    } catch (error) {
+        console.error('❌ Withdrawal info error:', error);
+        res.status(500).json({ error: 'Failed to get withdrawal information' });
+    }
+});
+
+// 🆕 USER TAX STATUS ENDPOINT
+app.get('/api/user/tax-status', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId)
+            .select('totalProfit taxStatus')
+            .lean();
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const currentProfit = user.totalProfit || 0;
+        const requiresTax = currentProfit > 50000000;
+        const taxAmount = requiresTax ? currentProfit * 0.1 : 0;
+        const hasPaidTax = user.taxStatus?.isPaid || false;
+        
+        const taxStatus = {
+            requiresTax,
+            totalProfit: currentProfit,
+            taxAmount,
+            taxPercentage: requiresTax ? 10 : 0,
+            hasPaidTax,
+            canWithdraw: !requiresTax || hasPaidTax,
+            paidAt: user.taxStatus?.paidAt,
+            notes: user.taxStatus?.notes,
+            message: requiresTax 
+                ? (hasPaidTax 
+                    ? 'Pajak sudah dibayar, penarikan dapat diproses'
+                    : 'Profit Anda melebihi Rp 50,000,000. Harap konfirmasi pembayaran pajak 10% melalui CS TradeStation dan Livechat')
+                : 'Tidak ada kewajiban pajak'
+        };
+        
+        res.json(taxStatus);
+        
+    } catch (error) {
+        console.error('❌ Tax status error:', error);
+        res.status(500).json({ error: 'Failed to get tax status' });
+    }
+});
+
 // ========================================
 // ✅ ENHANCED ADMIN ROUTES - FIXED & OPTIMIZED
 // ========================================
@@ -3045,7 +3174,11 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
             totalWithdrawals,
             pendingWithdrawals,
             totalBankAccounts,
-            activeBankAccounts
+            activeBankAccounts,
+            // 🆕 TAX RELATED STATS - TAMBAHKAN INI
+            usersRequiringTax,
+            paidTaxUsers,
+            unpaidTaxUsers
         ] = await Promise.all([
             User.countDocuments(),
             User.countDocuments({ isActive: true }),
@@ -3056,7 +3189,10 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
             Withdrawal.countDocuments(),
             Withdrawal.countDocuments({ status: 'pending' }),
             BankAccount.countDocuments(),
-            BankAccount.countDocuments({ isActive: true })
+            BankAccount.countDocuments({ isActive: true }),
+            User.countDocuments({ totalProfit: { $gt: 50000000 } }),
+            User.countDocuments({ totalProfit: { $gt: 50000000 }, 'taxStatus.isPaid': true }),
+            User.countDocuments({ totalProfit: { $gt: 50000000 }, 'taxStatus.isPaid': { $ne: true } })
         ]);
         
         const completedTrades = await Trade.find({ status: 'completed' }).select('amount').lean();
@@ -3090,17 +3226,40 @@ app.get('/api/admin/dashboard', authenticateToken, requireAdmin, async (req, res
             ])
         ]);
         
+        const taxUsers = await User.find({ totalProfit: { $gt: 50000000 } })
+            .select('totalProfit taxStatus')
+            .lean();
+        
+        const totalTaxRequired = taxUsers.reduce((sum, user) => sum + (user.totalProfit * 0.1), 0);
+        const totalTaxPaid = taxUsers
+            .filter(user => user.taxStatus?.isPaid)
+            .reduce((sum, user) => sum + (user.taxStatus?.amount || 0), 0);
+
         const stats = {
             users: { total: totalUsers, active: activeUsers },
-            trades: { total: totalTrades, active: activeTrades },
+            trades: { 
+                total: totalTrades, 
+                active: activeTrades,
+                maxAmount: 1000000000 // 🆕 Updated max trading amount
+            },
             deposits: { total: totalDeposits, pending: pendingDeposits },
             withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
             volume: { total: totalVolume, today: todayVolume },
             bankAccounts: { total: totalBankAccounts, active: activeBankAccounts },
-            // 🆕 PAYMENT METHODS STATISTICS
             paymentMethods: {
                 bank: { count: bankDeposits, amount: bankAmount[0]?.total || 0 },
                 qris: { count: qrisDeposits, amount: qrisAmount[0]?.total || 0 }
+            },
+            // 🆕 TAX STATISTICS - TAMBAHKAN INI
+            taxes: {
+                usersRequiringTax,
+                paidTaxUsers,
+                unpaidTaxUsers,
+                totalTaxRequired,
+                totalTaxPaid,
+                pendingTaxAmount: totalTaxRequired - totalTaxPaid,
+                taxThreshold: 50000000, // Rp 50 juta
+                taxPercentage: 10 // 10%
             }
         };
         
@@ -4260,6 +4419,172 @@ app.delete('/api/admin/bank-accounts/:id', authenticateToken, requireAdmin, asyn
         res.status(500).json({ error: 'Failed to delete bank account' });
     }
 });
+
+/ ========================================
+// 🆕 ADMIN TAX MANAGEMENT ENDPOINTS - TAMBAHKAN INI
+// ========================================
+
+// Get users with tax requirements
+app.get('/api/admin/taxes', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { status = 'all', limit = 50 } = req.query;
+        
+        let query = { totalProfit: { $gt: 50000000 } }; // Profit > 50 juta
+        
+        if (status === 'unpaid') {
+            query['taxStatus.isPaid'] = { $ne: true };
+        } else if (status === 'paid') {
+            query['taxStatus.isPaid'] = true;
+        }
+        
+        const users = await User.find(query)
+            .select('name email phone totalProfit taxStatus balance createdAt')
+            .sort({ totalProfit: -1 })
+            .limit(parseInt(limit))
+            .lean();
+        
+        const usersWithTaxInfo = users.map(user => {
+            const taxAmount = (user.totalProfit || 0) * 0.1;
+            return {
+                ...user,
+                taxAmount,
+                taxPercentage: 10,
+                requiresTax: true,
+                isPaid: user.taxStatus?.isPaid || false,
+                paidAt: user.taxStatus?.paidAt,
+                confirmedBy: user.taxStatus?.confirmedBy,
+                notes: user.taxStatus?.notes
+            };
+        });
+        
+        const stats = {
+            totalUsersRequiringTax: users.length,
+            paidCount: users.filter(u => u.taxStatus?.isPaid).length,
+            unpaidCount: users.filter(u => !u.taxStatus?.isPaid).length,
+            totalTaxAmount: users.reduce((sum, u) => sum + (u.totalProfit * 0.1), 0)
+        };
+        
+        res.json({
+            users: usersWithTaxInfo,
+            stats,
+            query: { status, limit }
+        });
+        
+    } catch (error) {
+        console.error('❌ Admin taxes error:', error);
+        res.status(500).json({ error: 'Failed to load tax information' });
+    }
+});
+
+// Confirm tax payment by admin
+app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { notes = '', amount } = req.body;
+        
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        if (user.totalProfit <= 50000000) {
+            return res.status(400).json({ error: 'User does not require tax payment (profit ≤ Rp 50,000,000)' });
+        }
+        
+        const calculatedTaxAmount = user.totalProfit * 0.1;
+        const taxAmount = amount || calculatedTaxAmount;
+        
+        user.taxStatus = {
+            isPaid: true,
+            amount: taxAmount,
+            paidAt: new Date(),
+            confirmedBy: req.userId,
+            notes: notes.trim()
+        };
+        
+        await user.save();
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_TAX_CONFIRM', 
+            `Confirmed tax payment for ${user.name}: ${formatCurrency(taxAmount)}. Notes: ${notes}`,
+            req
+        );
+        
+        // Notify user
+        io.to(user._id.toString()).emit('taxConfirmed', {
+            message: 'Pembayaran pajak telah dikonfirmasi. Anda sekarang dapat melakukan penarikan.',
+            taxAmount: taxAmount,
+            confirmedAt: user.taxStatus.paidAt
+        });
+        
+        res.json({
+            message: 'Tax payment confirmed successfully',
+            user: {
+                _id: user._id,
+                name: user.name,
+                totalProfit: user.totalProfit,
+                taxStatus: user.taxStatus
+            }
+        });
+        
+        console.log(`✅ Tax confirmed by admin for user: ${user.name} - ${formatCurrency(taxAmount)}`);
+        
+    } catch (error) {
+        console.error('❌ Admin tax confirm error:', error);
+        res.status(500).json({ error: 'Failed to confirm tax payment' });
+    }
+});
+
+// Reset tax payment (if needed)
+app.delete('/api/admin/user/:id/tax', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason = 'Reset by admin' } = req.body;
+        
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const previousTaxStatus = { ...user.taxStatus };
+        
+        user.taxStatus = {
+            isPaid: false,
+            amount: 0,
+            paidAt: null,
+            confirmedBy: null,
+            notes: `Reset: ${reason} (Previous: ${previousTaxStatus.notes || 'N/A'})`
+        };
+        
+        await user.save();
+        
+        await logActivity(
+            req.userId, 
+            'ADMIN_TAX_RESET', 
+            `Reset tax status for ${user.name}. Reason: ${reason}`,
+            req
+        );
+        
+        res.json({
+            message: 'Tax status reset successfully',
+            user: {
+                _id: user._id,
+                name: user.name,
+                totalProfit: user.totalProfit,
+                taxStatus: user.taxStatus
+            },
+            previousStatus: previousTaxStatus
+        });
+        
+        console.log(`✅ Tax status reset by admin for user: ${user.name}`);
+        
+    } catch (error) {
+        console.error('❌ Admin tax reset error:', error);
+        res.status(500).json({ error: 'Failed to reset tax status' });
+    }
+});
+
 
 // ========================================
 // 🆕 QRIS MANAGEMENT ENDPOINTS
