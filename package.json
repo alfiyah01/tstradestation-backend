@@ -1,135 +1,39 @@
 {
   "name": "tradestation-backend",
-  "version": "2.5.0",
-  "description": "Backend API untuk TradeStation - Platform Trading Cryptocurrency dengan fitur Mobile-First, Real-time Chart, Email Authentication",
+  "version": "4.0.0",
+  "description": "TradeStation Backend API with Enhanced Features",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "dev:debug": "nodemon --inspect server.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "echo \"Linting not configured yet\"",
-    "build": "echo \"Build process for production\"",
-    "seed": "node scripts/seed.js",
-    "backup": "node scripts/backup.js",
-    "logs": "pm2 logs tradestation",
-    "restart": "pm2 restart tradestation",
-    "stop": "pm2 stop tradestation",
-    "status": "pm2 status"
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^7.5.0",
+    "cors": "^2.8.5",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "express-rate-limit": "^6.10.0",
+    "helmet": "^7.0.0",
+    "socket.io": "^4.7.2",
+    "dotenv": "^16.3.1",
+    "node-cache": "^5.1.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   },
   "keywords": [
     "trading",
-    "cryptocurrency",
-    "bitcoin",
-    "ethereum",
     "api",
     "nodejs",
     "express",
     "mongodb",
-    "socket.io",
-    "real-time",
-    "mobile-first",
-    "candlestick",
-    "chart",
-    "deposit",
-    "withdrawal",
-    "jwt",
-    "authentication",
-    "indonesia",
-    "rupiah"
+    "socket.io"
   ],
-  "author": {
-    "name": "TradeStation Team",
-    "email": "admin@tradestation.com",
-    "url": "https://ts-traderstation.com"
-  },
+  "author": "TradeStation Team",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/your-username/tradestation-backend.git"
-  },
-  "bugs": {
-    "url": "https://github.com/your-username/tradestation-backend/issues"
-  },
-  "homepage": "https://ts-traderstation.com",
-  "dependencies": {
-    "express": "^4.18.2",
-    "mongoose": "^7.6.3",
-    "cors": "^2.8.5",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
-    "socket.io": "^4.7.4",
-    "express-rate-limit": "^7.1.5",
-    "helmet": "^7.1.0",
-    "dotenv": "^16.3.1",
-    "compression": "^1.7.4",
-    "morgan": "^1.10.0",
-    "validator": "^13.11.0",
-    "multer": "^1.4.5-lts.1",
-    "sharp": "^0.32.6",
-    "node-cron": "^3.0.3",
-    "moment": "^2.29.4",
-    "nodemailer": "^6.9.7"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1",
-    "eslint": "^8.54.0",
-    "prettier": "^3.1.0",
-    "jest": "^29.7.0",
-    "supertest": "^6.3.3",
-    "mongodb-memory-server": "^9.1.1"
-  },
   "engines": {
-    "node": ">=16.0.0",
-    "npm": ">=8.0.0"
-  },
-  "os": [
-    "linux",
-    "darwin",
-    "win32"
-  ],
-  "config": {
-    "mongodbMemoryServer": {
-      "version": "7.0.0"
-    }
-  },
-  "eslintConfig": {
-    "env": {
-      "node": true,
-      "es2021": true
-    },
-    "extends": "eslint:recommended",
-    "parserOptions": {
-      "ecmaVersion": 12,
-      "sourceType": "module"
-    },
-    "rules": {
-      "no-console": "off",
-      "no-unused-vars": "warn"
-    }
-  },
-  "prettier": {
-    "semi": true,
-    "singleQuote": true,
-    "tabWidth": 2,
-    "trailingComma": "es5"
-  },
-  "nodemonConfig": {
-    "watch": [
-      "server.js",
-      "routes/",
-      "models/",
-      "middleware/",
-      "utils/"
-    ],
-    "ext": "js,json",
-    "ignore": [
-      "node_modules/",
-      "logs/",
-      "uploads/"
-    ],
-    "env": {
-      "NODE_ENV": "development"
-    }
+    "node": ">=18.0.0"
   }
 }
