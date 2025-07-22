@@ -8,8 +8,6 @@ const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
-const NodeCache = require('node-cache');
-const cache = new NodeCache({ stdTTL: 600 }); // 10 menit cache
 
 const app = express();
 
@@ -21,15 +19,7 @@ const server = http.createServer(app);
 // Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: [
-            "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
-            "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
-            "https://www.tradestasion.com",     // ⚠️ DOMAIN LAMA (untuk backup)
-            "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
-            "http://localhost:3000", 
-            "http://127.0.0.1:5500", 
-            "http://localhost:5500"
-        ],
+        origin: ["https://www.tradestasion.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -40,98 +30,32 @@ const io = socketIo(server, {
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false
-
 }));
 
 app.use(cors({
-    origin: [
-        // ✅ DOMAIN UTAMA - HTTP & HTTPS
-        "https://www.traderstasion.com",
-        "https://traderstasion.com", 
-        "http://www.traderstasion.com",
-        "http://traderstasion.com",
-        
-        // Domain lama untuk backup
-        "https://ts-tradestation.netlify.app",
-        "https://tradestasion.com",
-        "http://tradestasion.com",
-        
-        // Development
-        "http://localhost:3000", 
-        "http://127.0.0.1:5500", 
-        "http://localhost:5500",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080"
-    ],
+    origin: ["https://www.tradestasion.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
-    optionsSuccessStatus: 200
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// ✅ PREFLIGHT HANDLER
-app.options('*', cors());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// ✅ DEBUG MIDDLEWARE
-app.use((req, res, next) => {
-    console.log(`🌐 ${req.method} ${req.path} from ${req.get('Origin') || req.get('Host')}`);
-    next();
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,
+    message: { error: 'Too many requests from this IP, please try again later.' }
 });
+app.use('/api/', limiter);
 
-// ✅ MANUAL CORS HEADERS SEBAGAI BACKUP
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    const allowedOrigins = [
-        'https://www.traderstasion.com',
-        'https://traderstasion.com',
-        'http://www.traderstasion.com',
-        'http://traderstasion.com',
-        'https://ts-tradestation.netlify.app',
-        'http://localhost:3000',
-        'http://localhost:5500',
-        'http://127.0.0.1:5500'
-    ];
-    
-    if (allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-    }
-    
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Max-Age', '86400');
-    
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-    
-    next();
+// Auth rate limiting
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5,
+    message: { error: 'Too many authentication attempts, please try again later.' }
 });
-
-console.log('✅ Fixed CORS & Helmet configuration applied');
-console.log('🌐 Allowed origins include HTTP & HTTPS variants');
-
-// ========================================
-// 🔧 ADDITIONAL ERROR HANDLING
-// ========================================
-
-// ✅ TAMBAHAN: Global error handler untuk mencegah crash
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    console.error('Stack:', error.stack);
-    // Don't exit in production, just log
-    if (process.env.NODE_ENV !== 'production') {
-        process.exit(1);
-    }
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise);
-    console.error('Reason:', reason);
-    // Don't exit, just log
-});
-
-console.log('✅ Enhanced error handling added');
 
 // ========================================
 // DATABASE MODELS - OPTIMIZED
@@ -1262,64 +1186,6 @@ async function runDatabaseMigration() {
     }
 }
 
-// 🆕 Cache Management Functions
-function clearUserCache(userId) {
-    cache.del(`user_${userId}`);
-    cache.del(`tax_status_${userId}`);
-    cache.del(`user_profile_${userId}`);
-    cache.del(`withdrawal_info_${userId}`);
-    
-    console.log(`✅ User cache cleared for: ${userId}`);
-}
-
-function clearTaxCache(userId) {
-    cache.del(`tax_status_${userId}`);
-    cache.del(`user_profile_${userId}`);
-    cache.del(`withdrawal_info_${userId}`);
-    
-    console.log(`✅ Tax cache cleared for user: ${userId}`);
-}
-
-// 🆕 Real-time broadcast functions (menggunakan io yang sudah ada)
-function broadcastTaxUpdate(userId, taxData) {
-    try {
-        io.to(userId.toString()).emit('tax_updated', {
-            ...taxData,
-            timestamp: new Date().toISOString(),
-            message: 'Tax status has been updated'
-        });
-        console.log(`📡 Tax update broadcast to user: ${userId}`);
-    } catch (error) {
-        console.error('❌ Error broadcasting tax update:', error);
-    }
-}
-
-function broadcastUserUpdate(userId, userData) {
-    try {
-        io.to(userId.toString()).emit('user_data_updated', {
-            ...userData,
-            timestamp: new Date().toISOString(),
-            message: 'Your account data has been updated'
-        });
-        console.log(`📡 User update broadcast to: ${userId}`);
-    } catch (error) {
-        console.error('❌ Error broadcasting user update:', error);
-    }
-}
-
-function broadcastWithdrawalStatusUpdate(userId, message) {
-    try {
-        io.to(userId.toString()).emit('withdrawal_status_changed', {
-            message,
-            timestamp: new Date().toISOString(),
-            canWithdraw: true
-        });
-        console.log(`📡 Withdrawal status update broadcast to: ${userId}`);
-    } catch (error) {
-        console.error('❌ Error broadcasting withdrawal update:', error);
-    }
-}
-
 // ========================================
 // 🔍 FUNGSI UNTUK CEK DATA YANG HILANG
 // ========================================
@@ -1912,7 +1778,7 @@ app.post('/api/admin/contracts/generate', authenticateToken, requireAdmin, async
         );
         
         // Generate access link
-        const contractLink = `${process.env.FRONTEND_URL || 'https://www.traderstasion.com'}/contract/${accessToken}`;
+        const contractLink = `${process.env.FRONTEND_URL || 'https://www.tradestasion.com'}/contract/${accessToken}`;
         
         res.status(201).json({
             success: true,
@@ -3096,139 +2962,63 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
         const { amount } = req.body;
         
-        console.log('💸 Withdrawal request:', { 
-            userId: req.userId, 
-            amount, 
-            timestamp: new Date().toISOString() 
-        });
+        if (!amount || amount < 100000) {
+            return res.status(400).json({ error: 'Minimum withdrawal is Rp 100,000' });
+        }
         
-        // ✅ VALIDASI INPUT
-        if (!amount) {
+        const user = await User.findById(req.userId);
+        
+        if (amount > user.balance) {
+            return res.status(400).json({ error: 'Insufficient balance' });
+        }
+        
+        if (!user.bankData || !user.bankData.bankName) {
             return res.status(400).json({ 
-                error: 'Amount is required',
-                details: 'Withdrawal amount must be specified'
+                error: 'Bank data is required. Please update your bank information first.' 
             });
         }
         
-        const withdrawalAmount = parseFloat(amount);
-        if (isNaN(withdrawalAmount) || withdrawalAmount < 100000) {
-            return res.status(400).json({ 
-                error: 'Minimum withdrawal is Rp 100,000',
-                details: `Received amount: ${amount}, minimum required: 100000`
-            });
-        }
-        
-        if (withdrawalAmount > 1000000000) { // 1 miliar max
-            return res.status(400).json({ 
-                error: 'Maximum withdrawal is Rp 1,000,000,000',
-                details: 'Please contact customer service for larger withdrawals'
-            });
-        }
-        
-        // ✅ GET USER DATA
-        const user = await User.findById(req.userId).select('balance totalProfit taxStatus bankData name email phone');
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        console.log('👤 User data:', {
-            userId: user._id,
-            name: user.name,
-            balance: user.balance,
-            totalProfit: user.totalProfit
-        });
-        
-        // ✅ VALIDASI BALANCE
-        if (withdrawalAmount > user.balance) {
-            return res.status(400).json({ 
-                error: 'Insufficient balance',
-                details: {
-                    requestedAmount: withdrawalAmount,
-                    availableBalance: user.balance,
-                    shortfall: withdrawalAmount - user.balance
-                }
-            });
-        }
-        
-        // ✅ VALIDASI BANK DATA
-        if (!user.bankData || !user.bankData.bankName || !user.bankData.accountNumber || !user.bankData.accountHolder) {
-            return res.status(400).json({ 
-                error: 'Bank data is required',
-                message: 'Please complete your bank information in Profile section before withdrawing',
-                details: {
-                    bankName: !!user.bankData?.bankName,
-                    accountNumber: !!user.bankData?.accountNumber,
-                    accountHolder: !!user.bankData?.accountHolder
-                }
-            });
-        }
-        
-        // ✅ TAX VALIDATION - ENHANCED
+        // 🆕 TAX VALIDATION - TAMBAHKAN INI
         const currentProfit = user.totalProfit || 0;
-        const taxThreshold = 50000000; // 50 juta
-        const requiresTax = currentProfit > taxThreshold;
+        const requiresTax = currentProfit > 50000000; // 50 juta
         const hasPaidTax = user.taxStatus?.isPaid || false;
-        
-        console.log('💰 Tax check:', {
-            currentProfit,
-            requiresTax,
-            hasPaidTax,
-            taxThreshold
-        });
         
         if (requiresTax && !hasPaidTax) {
             const taxAmount = currentProfit * 0.1; // 10%
             
             return res.status(400).json({ 
-                error: 'Tax payment required',
-                message: 'You must pay income tax before withdrawal can be processed',
+                error: 'Penarikan tidak dapat diproses',
+                message: 'Anda belum melakukan pembayaran pajak penghasilan',
                 details: {
-                    totalProfit: currentProfit,
-                    taxRequired: taxAmount,
-                    taxPercentage: 10,
-                    threshold: taxThreshold,
-                    instruction: 'Please contact TradeStation Customer Service via LiveChat to confirm tax payment'
+                    totalProfit: formatCurrency(currentProfit),
+                    taxRequired: formatCurrency(taxAmount),
+                    taxPercentage: '10%',
+                    instruction: 'Silakan konfirmasi pembayaran pajak melalui CS TradeStation dan Livechat terlebih dahulu'
                 },
                 taxInfo: {
                     required: true,
                     amount: taxAmount,
                     percentage: 10,
-                    reason: `Profit exceeds ${formatCurrency(taxThreshold)}`
+                    reason: 'Profit melebihi Rp 50,000,000'
                 }
             });
         }
         
-        // ✅ CALCULATE FEES
-        const feePercentage = 0.01; // 1%
+        const feePercentage = 0.01;
         const minimumFee = 6500;
-        const fee = Math.max(minimumFee, withdrawalAmount * feePercentage);
-        const finalAmount = withdrawalAmount - fee;
+        const fee = Math.max(minimumFee, amount * feePercentage);
+        const finalAmount = amount - fee;
         
         if (finalAmount <= 0) {
-            return res.status(400).json({ 
-                error: 'Amount too small after fees',
-                details: {
-                    requestedAmount: withdrawalAmount,
-                    fee: fee,
-                    finalAmount: finalAmount
-                }
-            });
+            return res.status(400).json({ error: 'Amount too small after fees' });
         }
         
-        console.log('💳 Fee calculation:', {
-            withdrawalAmount,
-            fee,
-            finalAmount
-        });
-        
-        // ✅ UPDATE USER BALANCE
-        user.balance -= withdrawalAmount;
+        user.balance -= amount;
         await user.save();
         
-        // ✅ CREATE WITHDRAWAL RECORD
         const withdrawal = new Withdrawal({
             userId: req.userId,
-            amount: withdrawalAmount,
+            amount,
             fee,
             finalAmount,
             bankAccount: {
@@ -3240,17 +3030,9 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
         
         await withdrawal.save();
         
-        // ✅ LOG ACTIVITY
-        await logActivity(
-            req.userId, 
-            'WITHDRAWAL_REQUEST', 
-            `Withdrawal request: ${formatCurrency(withdrawalAmount)} (net: ${formatCurrency(finalAmount)}) to ${user.bankData.bankName}`,
-            req
-        );
+        await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal request: ${formatCurrency(amount)} (net: ${formatCurrency(finalAmount)})`, req);
         
-        // ✅ SUCCESS RESPONSE
         res.status(201).json({
-            success: true,
             message: 'Withdrawal request submitted successfully',
             withdrawal: {
                 _id: withdrawal._id,
@@ -3261,40 +3043,14 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
                 status: withdrawal.status,
                 createdAt: withdrawal.createdAt
             },
-            newBalance: user.balance,
-            processing: {
-                estimatedTime: '1-24 hours',
-                workingDays: 'Monday - Friday',
-                note: 'Withdrawal will be processed during working hours'
-            }
+            newBalance: user.balance
         });
         
-        console.log(`✅ Withdrawal request created: ${formatCurrency(withdrawalAmount)} for user ${user.name}`);
+        console.log(`✅ Withdrawal request: ${formatCurrency(amount)} from user ${user.name}`);
         
     } catch (error) {
         console.error('❌ Withdrawal error:', error);
-        
-        // ✅ ENHANCED ERROR RESPONSE
-        let errorMessage = 'Failed to submit withdrawal';
-        let statusCode = 500;
-        
-        if (error.name === 'ValidationError') {
-            errorMessage = 'Validation failed';
-            statusCode = 400;
-        } else if (error.name === 'CastError') {
-            errorMessage = 'Invalid data format';
-            statusCode = 400;
-        } else if (error.code === 11000) {
-            errorMessage = 'Duplicate withdrawal request';
-            statusCode = 409;
-        }
-        
-        res.status(statusCode).json({ 
-            error: errorMessage,
-            message: error.message,
-            timestamp: new Date().toISOString(),
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
+        res.status(500).json({ error: 'Failed to submit withdrawal' });
     }
 });
 
@@ -3362,67 +3118,6 @@ app.get('/api/withdrawal/info', authenticateToken, async (req, res) => {
     }
 });
 
-// ✅ CEK WITHDRAWAL ELIGIBILITY
-app.get('/api/withdrawal/check', authenticateToken, async (req, res) => {
-    try {
-        const user = await User.findById(req.userId)
-            .select('balance totalProfit taxStatus bankData')
-            .lean();
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        const currentProfit = user.totalProfit || 0;
-        const requiresTax = currentProfit > 50000000; // 50 juta
-        const taxAmount = requiresTax ? currentProfit * 0.1 : 0; // 10% pajak
-        const hasPaidTax = user.taxStatus?.isPaid || false;
-        
-        // Check if withdrawal is allowed
-        const canWithdraw = !requiresTax || hasPaidTax;
-        
-        const bankDataComplete = !!(
-            user.bankData?.bankName && 
-            user.bankData?.accountNumber && 
-            user.bankData?.accountHolder
-        );
-        
-        const withdrawalInfo = {
-            canWithdraw: canWithdraw && bankDataComplete,
-            balance: user.balance,
-            minimumWithdrawal: 100000,
-            maximumWithdrawal: 1000000000,
-            feePercentage: 1, // 1%
-            minimumFee: 6500,
-            bankDataComplete,
-            taxInfo: requiresTax ? {
-                required: true,
-                amount: taxAmount,
-                paid: hasPaidTax,
-                paidAt: user.taxStatus?.paidAt,
-                message: hasPaidTax 
-                    ? "Tax paid, withdrawal allowed"
-                    : "Tax payment required before withdrawal"
-            } : null,
-            restrictions: []
-        };
-        
-        if (!bankDataComplete) {
-            withdrawalInfo.restrictions.push("Complete bank data required");
-        }
-        
-        if (requiresTax && !hasPaidTax) {
-            withdrawalInfo.restrictions.push("Tax payment confirmation required");
-        }
-        
-        res.json(withdrawalInfo);
-        
-    } catch (error) {
-        console.error('❌ Withdrawal check error:', error);
-        res.status(500).json({ error: 'Failed to check withdrawal status' });
-    }
-});
-
 // 🆕 USER TAX STATUS ENDPOINT
 app.get('/api/user/tax-status', authenticateToken, async (req, res) => {
     try {
@@ -3456,56 +3151,6 @@ app.get('/api/user/tax-status', authenticateToken, async (req, res) => {
         };
         
         res.json(taxStatus);
-        
-    } catch (error) {
-        console.error('❌ Tax status error:', error);
-        res.status(500).json({ error: 'Failed to get tax status' });
-    }
-});
-
-// 🆕 TAX STATUS ENDPOINT - TAMBAHKAN KODE INI
-app.get('/api/tax/status', authenticateToken, async (req, res) => {
-    try {
-        const user = await User.findById(req.userId)
-            .select('totalProfit taxStatus')
-            .lean();
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        const currentProfit = user.totalProfit || 0;
-        const taxThreshold = 50000000; // 50 juta
-        const requiresTax = currentProfit > taxThreshold;
-        
-        if (!requiresTax) {
-            return res.status(404).json({ 
-                error: 'No tax required',
-                message: 'User profit is below tax threshold'
-            });
-        }
-        
-        const taxAmount = currentProfit * 0.1; // 10% tax
-        const isPaid = user.taxStatus?.isPaid || false;
-        
-        const taxData = {
-            requiresTax: true,
-            totalProfit: currentProfit,
-            taxAmount,
-            taxPercentage: 10,
-            isPaid,
-            paidAt: user.taxStatus?.paidAt,
-            confirmedBy: user.taxStatus?.confirmedBy,
-            notes: user.taxStatus?.notes || '',
-            threshold: taxThreshold,
-            message: isPaid 
-                ? 'Tax has been paid and confirmed'
-                : 'Tax payment required before withdrawal'
-        };
-        
-        res.json(taxData);
-        
-        console.log(`✅ Tax status checked for user: ${req.userId} - requires: ${requiresTax}, paid: ${isPaid}`);
         
     } catch (error) {
         console.error('❌ Tax status error:', error);
@@ -4859,9 +4504,6 @@ app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, asyn
         
         await user.save();
         
-        // 🆕 CLEAR CACHE
-        clearTaxCache(user._id);
-        
         await logActivity(
             req.userId, 
             'ADMIN_TAX_CONFIRM', 
@@ -4869,17 +4511,7 @@ app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, asyn
             req
         );
         
-        // 🆕 REAL-TIME BROADCAST
-        broadcastTaxUpdate(user._id, {
-            isPaid: true,
-            taxAmount,
-            confirmedAt: user.taxStatus.paidAt,
-            canWithdraw: true
-        });
-        
-        broadcastWithdrawalStatusUpdate(user._id, 'Pembayaran pajak telah dikonfirmasi. Anda sekarang dapat melakukan penarikan.');
-        
-        // Original socket notification
+        // Notify user
         io.to(user._id.toString()).emit('taxConfirmed', {
             message: 'Pembayaran pajak telah dikonfirmasi. Anda sekarang dapat melakukan penarikan.',
             taxAmount: taxAmount,
@@ -4887,7 +4519,6 @@ app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, asyn
         });
         
         res.json({
-            success: true,
             message: 'Tax payment confirmed successfully',
             user: {
                 _id: user._id,
@@ -5512,222 +5143,6 @@ app.post('/api/admin/users/bulk', authenticateToken, requireAdmin, async (req, r
     }
 });
 
-// 🆕 Webhook untuk auto-refresh
-app.post('/api/webhook/tax-update', (req, res) => {
-    try {
-        const { userId, action = 'update' } = req.body;
-        
-        if (userId) {
-            // Clear cache
-            clearTaxCache(userId);
-            
-            // Trigger update ke semua connected clients
-            io.emit('refresh_user_data', { 
-                userId,
-                action,
-                timestamp: new Date().toISOString()
-            });
-            
-            console.log(`🔄 Tax webhook triggered for user: ${userId}`);
-        }
-        
-        res.json({ 
-            received: true,
-            userId,
-            action,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        console.error('❌ Tax webhook error:', error);
-        res.status(500).json({ error: 'Webhook failed' });
-    }
-});
-
-// 🆕 Cache management endpoint (admin only)
-app.delete('/api/admin/cache/:userId', authenticateToken, requireAdmin, (req, res) => {
-    try {
-        const { userId } = req.params;
-        clearUserCache(userId);
-        
-        res.json({ 
-            message: 'Cache cleared successfully',
-            userId,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to clear cache' });
-    }
-});
-
-// 🆕 Clear all cache endpoint (admin only)
-app.delete('/api/admin/cache', authenticateToken, requireAdmin, (req, res) => {
-    try {
-        cache.flushAll();
-        
-        res.json({ 
-            message: 'All cache cleared successfully',
-            timestamp: new Date().toISOString()
-        });
-        
-        console.log('🗑️ All cache cleared by admin');
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to clear all cache' });
-    }
-});
-
-// 🆕 ENHANCED User profile endpoint dengan caching
-app.get('/api/profile/cached', authenticateToken, async (req, res) => {
-    try {
-        const userId = req.userId;
-        const cacheKey = `user_profile_${userId}`;
-        
-        // Check cache first
-        let user = cache.get(cacheKey);
-        let fromCache = true;
-        
-        if (!user) {
-            user = await User.findById(userId).select('-password').lean();
-            if (user) {
-                cache.set(cacheKey, user, 300); // 5 menit cache
-                fromCache = false;
-            }
-        }
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        // Add tax info
-        const currentProfit = user.totalProfit || 0;
-        const requiresTax = currentProfit > 50000000;
-        const taxAmount = requiresTax ? currentProfit * 0.1 : 0;
-        const hasPaidTax = user.taxStatus?.isPaid || false;
-        
-        const responseData = {
-            ...user,
-            taxInfo: {
-                requiresTax,
-                taxAmount,
-                hasPaidTax,
-                canWithdraw: !requiresTax || hasPaidTax
-            },
-            cache: {
-                fromCache,
-                timestamp: new Date().toISOString()
-            }
-        };
-        
-        res.json(responseData);
-        
-    } catch (error) {
-        console.error('❌ Cached profile error:', error);
-        res.status(500).json({ error: 'Failed to load profile' });
-    }
-});
-
-// 🆕 Real-time tax status endpoint
-app.get('/api/tax/status/realtime', authenticateToken, async (req, res) => {
-    try {
-        const userId = req.userId;
-        const cacheKey = `tax_status_${userId}`;
-        
-        let taxStatus = cache.get(cacheKey);
-        let fromCache = true;
-        
-        if (!taxStatus) {
-            const user = await User.findById(userId)
-                .select('totalProfit taxStatus')
-                .lean();
-            
-            if (!user) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-            
-            const currentProfit = user.totalProfit || 0;
-            const taxThreshold = 50000000;
-            const requiresTax = currentProfit > taxThreshold;
-            
-            if (!requiresTax) {
-                return res.status(404).json({ 
-                    error: 'No tax required',
-                    message: 'User profit is below tax threshold'
-                });
-            }
-            
-            const taxAmount = currentProfit * 0.1;
-            const isPaid = user.taxStatus?.isPaid || false;
-            
-            taxStatus = {
-                requiresTax: true,
-                totalProfit: currentProfit,
-                taxAmount,
-                taxPercentage: 10,
-                isPaid,
-                paidAt: user.taxStatus?.paidAt,
-                confirmedBy: user.taxStatus?.confirmedBy,
-                notes: user.taxStatus?.notes || '',
-                threshold: taxThreshold,
-                canWithdraw: isPaid,
-                message: isPaid 
-                    ? 'Tax has been paid and confirmed'
-                    : 'Tax payment required before withdrawal'
-            };
-            
-            cache.set(cacheKey, taxStatus, 600); // 10 menit cache
-            fromCache = false;
-        }
-        
-        const responseData = {
-            ...taxStatus,
-            cache: {
-                fromCache,
-                timestamp: new Date().toISOString()
-            }
-        };
-        
-        res.json(responseData);
-        
-        console.log(`✅ Real-time tax status checked for user: ${userId} - requires: ${taxStatus.requiresTax}, paid: ${taxStatus.isPaid}`);
-        
-    } catch (error) {
-        console.error('❌ Real-time tax status error:', error);
-        res.status(500).json({ error: 'Failed to get tax status' });
-    }
-});
-
-// ========================================
-// 🆕 CACHE STATISTICS ENDPOINT
-// ========================================
-
-app.get('/api/admin/cache/stats', authenticateToken, requireAdmin, (req, res) => {
-    try {
-        const stats = cache.getStats();
-        const keys = cache.keys();
-        
-        const cacheInfo = {
-            stats,
-            totalKeys: keys.length,
-            keys: keys.slice(0, 20), // Show first 20 keys
-            memory: {
-                used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
-            },
-            timestamp: new Date().toISOString()
-        };
-        
-        res.json(cacheInfo);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to get cache stats' });
-    }
-});
-
-console.log('✅ Enhanced features added:');
-console.log('   • NodeCache caching system');
-console.log('   • Real-time tax updates');
-console.log('   • Cache management endpoints');
-console.log('   • Enhanced Socket.IO events');
-console.log('   • Webhook for auto-refresh');
-
 // ========================================
 // ✅ ENHANCED SOCKET.IO HANDLING
 // ========================================
@@ -5789,95 +5204,6 @@ io.on('connection', (socket) => {
     socket.on('ping', () => {
         socket.emit('pong');
     });
-
-    // 🆕 User room management
-socket.on('join_user_room', (userId) => {
-    if (userId && typeof userId === 'string') {
-        socket.join(userId);
-        console.log(`👤 User ${userId} joined personal room`);
-        
-        // Send initial status
-        socket.emit('room_joined', {
-            userId,
-            timestamp: new Date().toISOString(),
-            message: 'Connected to real-time updates'
-        });
-    }
-});
-
-// 🆕 Request real-time user data
-socket.on('request_user_data', async (userId) => {
-    if (userId && typeof userId === 'string') {
-        try {
-            const cacheKey = `user_profile_${userId}`;
-            let userData = cache.get(cacheKey);
-            
-            if (!userData) {
-                const user = await User.findById(userId)
-                    .select('-password')
-                    .lean();
-                if (user) {
-                    userData = user;
-                    cache.set(cacheKey, userData, 300); // 5 menit cache
-                }
-            }
-            
-            socket.emit('user_data_response', {
-                userData,
-                cached: !!cache.get(cacheKey),
-                timestamp: new Date().toISOString()
-            });
-        } catch (error) {
-            console.error('❌ Error fetching user data:', error);
-            socket.emit('user_data_error', { error: 'Failed to fetch user data' });
-        }
-    }
-});
-
-// 🆕 Request tax status
-socket.on('request_tax_status', async (userId) => {
-    if (userId && typeof userId === 'string') {
-        try {
-            const cacheKey = `tax_status_${userId}`;
-            let taxStatus = cache.get(cacheKey);
-            
-            if (!taxStatus) {
-                const user = await User.findById(userId)
-                    .select('totalProfit taxStatus')
-                    .lean();
-                    
-                if (user) {
-                    const currentProfit = user.totalProfit || 0;
-                    const requiresTax = currentProfit > 50000000;
-                    const taxAmount = requiresTax ? currentProfit * 0.1 : 0;
-                    const hasPaidTax = user.taxStatus?.isPaid || false;
-                    
-                    taxStatus = {
-                        requiresTax,
-                        totalProfit: currentProfit,
-                        taxAmount,
-                        taxPercentage: requiresTax ? 10 : 0,
-                        hasPaidTax,
-                        canWithdraw: !requiresTax || hasPaidTax,
-                        paidAt: user.taxStatus?.paidAt,
-                        notes: user.taxStatus?.notes
-                    };
-                    
-                    cache.set(cacheKey, taxStatus, 600); // 10 menit cache
-                }
-            }
-            
-            socket.emit('tax_status_response', {
-                taxStatus,
-                cached: !!cache.get(cacheKey),
-                timestamp: new Date().toISOString()
-            });
-        } catch (error) {
-            console.error('❌ Error fetching tax status:', error);
-            socket.emit('tax_status_error', { error: 'Failed to fetch tax status' });
-        }
-    }
-});
     
     socket.on('disconnect', (reason) => {
         console.log('👤 User disconnected:', socket.id, 'Reason:', reason);
