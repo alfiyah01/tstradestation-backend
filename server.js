@@ -24,7 +24,7 @@ const io = socketIo(server, {
         origin: [
             "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
             "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
-            "https://ts-tradestation.netlify.app/",     // ⚠️ DOMAIN LAMA (untuk backup)
+            "https://www.tradestasion.com",     // ⚠️ DOMAIN LAMA (untuk backup)
             "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
             "http://localhost:3000", 
             "http://127.0.0.1:5500", 
@@ -40,22 +40,82 @@ const io = socketIo(server, {
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false
+    crossOriginResourcePolicy: false
 }));
 
 app.use(cors({
     origin: [
-        "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
-        "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
-        "https://ts-tradestation.netlify.app/",     // ⚠️ DOMAIN LAMA (untuk backup)
-        "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
+        // ✅ TAMBAHKAN HTTP DAN HTTPS VARIANTS
+        "https://www.traderstasion.com",
+        "https://traderstasion.com", 
+        "http://www.traderstasion.com",      // ✅ TAMBAH HTTP
+        "http://traderstasion.com",          // ✅ TAMBAH HTTP
+        
+        // Domain lama untuk backup
+        "https://ts-tradestation.netlify.app",
+        "https://tradestasion.com",
+        "http://tradestasion.com",           // ✅ TAMBAH HTTP
+        
+        // Development
         "http://localhost:3000", 
         "http://127.0.0.1:5500", 
-        "http://localhost:5500"
+        "http://localhost:5500",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080"
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));    
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+    optionsSuccessStatus: 200 // ✅ TAMBAH UNTUK IE11
+}));
+
+// ✅ TAMBAH MANUAL CORS HEADERS SEBAGAI BACKUP
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const allowedOrigins = [
+        'https://www.traderstasion.com',
+        'https://traderstasion.com',
+        'http://www.traderstasion.com',
+        'http://traderstasion.com',
+        'https://ts-tradestation.netlify.app',
+        'http://localhost:3000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500'
+    ];
+    
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+    
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    
+    next();
+});
+
+console.log('✅ Enhanced CORS configuration applied');
+console.log('🌐 Allowed origins:', [
+    'http://traderstasion.com',
+    'https://traderstasion.com',
+    'http://www.traderstasion.com', 
+    'https://www.traderstasion.com'
+]);
+
+// ✅ TAMBAH PREFLIGHT HANDLER
+app.options('*', cors());
+
+// ✅ TAMBAH MIDDLEWARE UNTUK DEBUG CORS
+app.use((req, res, next) => {
+    console.log(`🌐 ${req.method} ${req.path} from ${req.get('Origin') || req.get('Host')}`);
+    next();
+});    
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -1854,7 +1914,7 @@ app.post('/api/admin/contracts/generate', authenticateToken, requireAdmin, async
         );
         
         // Generate access link
-        const contractLink = `${process.env.FRONTEND_URL || 'https://ts-tradestation.netlify.app/'}/contract/${accessToken}`;
+        const contractLink = `${process.env.FRONTEND_URL || 'https://www.traderstasion.com'}/contract/${accessToken}`;
         
         res.status(201).json({
             success: true,
