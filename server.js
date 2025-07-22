@@ -8,6 +8,8 @@ const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
+const NodeCache = require('node-cache');
+const cache = new NodeCache({ stdTTL: 600 }); // 10 menit cache
 
 const app = express();
 
@@ -1183,6 +1185,64 @@ async function runDatabaseMigration() {
     } catch (error) {
         console.error('❌ Safe migration error:', error);
         return false;
+    }
+}
+
+// 🆕 Cache Management Functions
+function clearUserCache(userId) {
+    cache.del(`user_${userId}`);
+    cache.del(`tax_status_${userId}`);
+    cache.del(`user_profile_${userId}`);
+    cache.del(`withdrawal_info_${userId}`);
+    
+    console.log(`✅ User cache cleared for: ${userId}`);
+}
+
+function clearTaxCache(userId) {
+    cache.del(`tax_status_${userId}`);
+    cache.del(`user_profile_${userId}`);
+    cache.del(`withdrawal_info_${userId}`);
+    
+    console.log(`✅ Tax cache cleared for user: ${userId}`);
+}
+
+// 🆕 Real-time broadcast functions (menggunakan io yang sudah ada)
+function broadcastTaxUpdate(userId, taxData) {
+    try {
+        io.to(userId.toString()).emit('tax_updated', {
+            ...taxData,
+            timestamp: new Date().toISOString(),
+            message: 'Tax status has been updated'
+        });
+        console.log(`📡 Tax update broadcast to user: ${userId}`);
+    } catch (error) {
+        console.error('❌ Error broadcasting tax update:', error);
+    }
+}
+
+function broadcastUserUpdate(userId, userData) {
+    try {
+        io.to(userId.toString()).emit('user_data_updated', {
+            ...userData,
+            timestamp: new Date().toISOString(),
+            message: 'Your account data has been updated'
+        });
+        console.log(`📡 User update broadcast to: ${userId}`);
+    } catch (error) {
+        console.error('❌ Error broadcasting user update:', error);
+    }
+}
+
+function broadcastWithdrawalStatusUpdate(userId, message) {
+    try {
+        io.to(userId.toString()).emit('withdrawal_status_changed', {
+            message,
+            timestamp: new Date().toISOString(),
+            canWithdraw: true
+        });
+        console.log(`📡 Withdrawal status update broadcast to: ${userId}`);
+    } catch (error) {
+        console.error('❌ Error broadcasting withdrawal update:', error);
     }
 }
 
@@ -4725,6 +4785,9 @@ app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, asyn
         
         await user.save();
         
+        // 🆕 CLEAR CACHE
+        clearTaxCache(user._id);
+        
         await logActivity(
             req.userId, 
             'ADMIN_TAX_CONFIRM', 
@@ -4732,7 +4795,17 @@ app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, asyn
             req
         );
         
-        // Notify user
+        // 🆕 REAL-TIME BROADCAST
+        broadcastTaxUpdate(user._id, {
+            isPaid: true,
+            taxAmount,
+            confirmedAt: user.taxStatus.paidAt,
+            canWithdraw: true
+        });
+        
+        broadcastWithdrawalStatusUpdate(user._id, 'Pembayaran pajak telah dikonfirmasi. Anda sekarang dapat melakukan penarikan.');
+        
+        // Original socket notification
         io.to(user._id.toString()).emit('taxConfirmed', {
             message: 'Pembayaran pajak telah dikonfirmasi. Anda sekarang dapat melakukan penarikan.',
             taxAmount: taxAmount,
@@ -4740,6 +4813,7 @@ app.put('/api/admin/user/:id/tax/confirm', authenticateToken, requireAdmin, asyn
         });
         
         res.json({
+            success: true,
             message: 'Tax payment confirmed successfully',
             user: {
                 _id: user._id,
@@ -5364,6 +5438,222 @@ app.post('/api/admin/users/bulk', authenticateToken, requireAdmin, async (req, r
     }
 });
 
+// 🆕 Webhook untuk auto-refresh
+app.post('/api/webhook/tax-update', (req, res) => {
+    try {
+        const { userId, action = 'update' } = req.body;
+        
+        if (userId) {
+            // Clear cache
+            clearTaxCache(userId);
+            
+            // Trigger update ke semua connected clients
+            io.emit('refresh_user_data', { 
+                userId,
+                action,
+                timestamp: new Date().toISOString()
+            });
+            
+            console.log(`🔄 Tax webhook triggered for user: ${userId}`);
+        }
+        
+        res.json({ 
+            received: true,
+            userId,
+            action,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Tax webhook error:', error);
+        res.status(500).json({ error: 'Webhook failed' });
+    }
+});
+
+// 🆕 Cache management endpoint (admin only)
+app.delete('/api/admin/cache/:userId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        const { userId } = req.params;
+        clearUserCache(userId);
+        
+        res.json({ 
+            message: 'Cache cleared successfully',
+            userId,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear cache' });
+    }
+});
+
+// 🆕 Clear all cache endpoint (admin only)
+app.delete('/api/admin/cache', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        cache.flushAll();
+        
+        res.json({ 
+            message: 'All cache cleared successfully',
+            timestamp: new Date().toISOString()
+        });
+        
+        console.log('🗑️ All cache cleared by admin');
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear all cache' });
+    }
+});
+
+// 🆕 ENHANCED User profile endpoint dengan caching
+app.get('/api/profile/cached', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const cacheKey = `user_profile_${userId}`;
+        
+        // Check cache first
+        let user = cache.get(cacheKey);
+        let fromCache = true;
+        
+        if (!user) {
+            user = await User.findById(userId).select('-password').lean();
+            if (user) {
+                cache.set(cacheKey, user, 300); // 5 menit cache
+                fromCache = false;
+            }
+        }
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Add tax info
+        const currentProfit = user.totalProfit || 0;
+        const requiresTax = currentProfit > 50000000;
+        const taxAmount = requiresTax ? currentProfit * 0.1 : 0;
+        const hasPaidTax = user.taxStatus?.isPaid || false;
+        
+        const responseData = {
+            ...user,
+            taxInfo: {
+                requiresTax,
+                taxAmount,
+                hasPaidTax,
+                canWithdraw: !requiresTax || hasPaidTax
+            },
+            cache: {
+                fromCache,
+                timestamp: new Date().toISOString()
+            }
+        };
+        
+        res.json(responseData);
+        
+    } catch (error) {
+        console.error('❌ Cached profile error:', error);
+        res.status(500).json({ error: 'Failed to load profile' });
+    }
+});
+
+// 🆕 Real-time tax status endpoint
+app.get('/api/tax/status/realtime', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const cacheKey = `tax_status_${userId}`;
+        
+        let taxStatus = cache.get(cacheKey);
+        let fromCache = true;
+        
+        if (!taxStatus) {
+            const user = await User.findById(userId)
+                .select('totalProfit taxStatus')
+                .lean();
+            
+            if (!user) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+            
+            const currentProfit = user.totalProfit || 0;
+            const taxThreshold = 50000000;
+            const requiresTax = currentProfit > taxThreshold;
+            
+            if (!requiresTax) {
+                return res.status(404).json({ 
+                    error: 'No tax required',
+                    message: 'User profit is below tax threshold'
+                });
+            }
+            
+            const taxAmount = currentProfit * 0.1;
+            const isPaid = user.taxStatus?.isPaid || false;
+            
+            taxStatus = {
+                requiresTax: true,
+                totalProfit: currentProfit,
+                taxAmount,
+                taxPercentage: 10,
+                isPaid,
+                paidAt: user.taxStatus?.paidAt,
+                confirmedBy: user.taxStatus?.confirmedBy,
+                notes: user.taxStatus?.notes || '',
+                threshold: taxThreshold,
+                canWithdraw: isPaid,
+                message: isPaid 
+                    ? 'Tax has been paid and confirmed'
+                    : 'Tax payment required before withdrawal'
+            };
+            
+            cache.set(cacheKey, taxStatus, 600); // 10 menit cache
+            fromCache = false;
+        }
+        
+        const responseData = {
+            ...taxStatus,
+            cache: {
+                fromCache,
+                timestamp: new Date().toISOString()
+            }
+        };
+        
+        res.json(responseData);
+        
+        console.log(`✅ Real-time tax status checked for user: ${userId} - requires: ${taxStatus.requiresTax}, paid: ${taxStatus.isPaid}`);
+        
+    } catch (error) {
+        console.error('❌ Real-time tax status error:', error);
+        res.status(500).json({ error: 'Failed to get tax status' });
+    }
+});
+
+// ========================================
+// 🆕 CACHE STATISTICS ENDPOINT
+// ========================================
+
+app.get('/api/admin/cache/stats', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        const stats = cache.getStats();
+        const keys = cache.keys();
+        
+        const cacheInfo = {
+            stats,
+            totalKeys: keys.length,
+            keys: keys.slice(0, 20), // Show first 20 keys
+            memory: {
+                used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
+            },
+            timestamp: new Date().toISOString()
+        };
+        
+        res.json(cacheInfo);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get cache stats' });
+    }
+});
+
+console.log('✅ Enhanced features added:');
+console.log('   • NodeCache caching system');
+console.log('   • Real-time tax updates');
+console.log('   • Cache management endpoints');
+console.log('   • Enhanced Socket.IO events');
+console.log('   • Webhook for auto-refresh');
+
 // ========================================
 // ✅ ENHANCED SOCKET.IO HANDLING
 // ========================================
@@ -5425,6 +5715,95 @@ io.on('connection', (socket) => {
     socket.on('ping', () => {
         socket.emit('pong');
     });
+
+    // 🆕 User room management
+socket.on('join_user_room', (userId) => {
+    if (userId && typeof userId === 'string') {
+        socket.join(userId);
+        console.log(`👤 User ${userId} joined personal room`);
+        
+        // Send initial status
+        socket.emit('room_joined', {
+            userId,
+            timestamp: new Date().toISOString(),
+            message: 'Connected to real-time updates'
+        });
+    }
+});
+
+// 🆕 Request real-time user data
+socket.on('request_user_data', async (userId) => {
+    if (userId && typeof userId === 'string') {
+        try {
+            const cacheKey = `user_profile_${userId}`;
+            let userData = cache.get(cacheKey);
+            
+            if (!userData) {
+                const user = await User.findById(userId)
+                    .select('-password')
+                    .lean();
+                if (user) {
+                    userData = user;
+                    cache.set(cacheKey, userData, 300); // 5 menit cache
+                }
+            }
+            
+            socket.emit('user_data_response', {
+                userData,
+                cached: !!cache.get(cacheKey),
+                timestamp: new Date().toISOString()
+            });
+        } catch (error) {
+            console.error('❌ Error fetching user data:', error);
+            socket.emit('user_data_error', { error: 'Failed to fetch user data' });
+        }
+    }
+});
+
+// 🆕 Request tax status
+socket.on('request_tax_status', async (userId) => {
+    if (userId && typeof userId === 'string') {
+        try {
+            const cacheKey = `tax_status_${userId}`;
+            let taxStatus = cache.get(cacheKey);
+            
+            if (!taxStatus) {
+                const user = await User.findById(userId)
+                    .select('totalProfit taxStatus')
+                    .lean();
+                    
+                if (user) {
+                    const currentProfit = user.totalProfit || 0;
+                    const requiresTax = currentProfit > 50000000;
+                    const taxAmount = requiresTax ? currentProfit * 0.1 : 0;
+                    const hasPaidTax = user.taxStatus?.isPaid || false;
+                    
+                    taxStatus = {
+                        requiresTax,
+                        totalProfit: currentProfit,
+                        taxAmount,
+                        taxPercentage: requiresTax ? 10 : 0,
+                        hasPaidTax,
+                        canWithdraw: !requiresTax || hasPaidTax,
+                        paidAt: user.taxStatus?.paidAt,
+                        notes: user.taxStatus?.notes
+                    };
+                    
+                    cache.set(cacheKey, taxStatus, 600); // 10 menit cache
+                }
+            }
+            
+            socket.emit('tax_status_response', {
+                taxStatus,
+                cached: !!cache.get(cacheKey),
+                timestamp: new Date().toISOString()
+            });
+        } catch (error) {
+            console.error('❌ Error fetching tax status:', error);
+            socket.emit('tax_status_error', { error: 'Failed to fetch tax status' });
+        }
+    }
+});
     
     socket.on('disconnect', (reason) => {
         console.log('👤 User disconnected:', socket.id, 'Reason:', reason);
