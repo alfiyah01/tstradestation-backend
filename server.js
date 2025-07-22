@@ -2962,63 +2962,139 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
     try {
         const { amount } = req.body;
         
-        if (!amount || amount < 100000) {
-            return res.status(400).json({ error: 'Minimum withdrawal is Rp 100,000' });
-        }
+        console.log('💸 Withdrawal request:', { 
+            userId: req.userId, 
+            amount, 
+            timestamp: new Date().toISOString() 
+        });
         
-        const user = await User.findById(req.userId);
-        
-        if (amount > user.balance) {
-            return res.status(400).json({ error: 'Insufficient balance' });
-        }
-        
-        if (!user.bankData || !user.bankData.bankName) {
+        // ✅ VALIDASI INPUT
+        if (!amount) {
             return res.status(400).json({ 
-                error: 'Bank data is required. Please update your bank information first.' 
+                error: 'Amount is required',
+                details: 'Withdrawal amount must be specified'
             });
         }
         
-        // 🆕 TAX VALIDATION - TAMBAHKAN INI
+        const withdrawalAmount = parseFloat(amount);
+        if (isNaN(withdrawalAmount) || withdrawalAmount < 100000) {
+            return res.status(400).json({ 
+                error: 'Minimum withdrawal is Rp 100,000',
+                details: `Received amount: ${amount}, minimum required: 100000`
+            });
+        }
+        
+        if (withdrawalAmount > 1000000000) { // 1 miliar max
+            return res.status(400).json({ 
+                error: 'Maximum withdrawal is Rp 1,000,000,000',
+                details: 'Please contact customer service for larger withdrawals'
+            });
+        }
+        
+        // ✅ GET USER DATA
+        const user = await User.findById(req.userId).select('balance totalProfit taxStatus bankData name email phone');
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log('👤 User data:', {
+            userId: user._id,
+            name: user.name,
+            balance: user.balance,
+            totalProfit: user.totalProfit
+        });
+        
+        // ✅ VALIDASI BALANCE
+        if (withdrawalAmount > user.balance) {
+            return res.status(400).json({ 
+                error: 'Insufficient balance',
+                details: {
+                    requestedAmount: withdrawalAmount,
+                    availableBalance: user.balance,
+                    shortfall: withdrawalAmount - user.balance
+                }
+            });
+        }
+        
+        // ✅ VALIDASI BANK DATA
+        if (!user.bankData || !user.bankData.bankName || !user.bankData.accountNumber || !user.bankData.accountHolder) {
+            return res.status(400).json({ 
+                error: 'Bank data is required',
+                message: 'Please complete your bank information in Profile section before withdrawing',
+                details: {
+                    bankName: !!user.bankData?.bankName,
+                    accountNumber: !!user.bankData?.accountNumber,
+                    accountHolder: !!user.bankData?.accountHolder
+                }
+            });
+        }
+        
+        // ✅ TAX VALIDATION - ENHANCED
         const currentProfit = user.totalProfit || 0;
-        const requiresTax = currentProfit > 50000000; // 50 juta
+        const taxThreshold = 50000000; // 50 juta
+        const requiresTax = currentProfit > taxThreshold;
         const hasPaidTax = user.taxStatus?.isPaid || false;
+        
+        console.log('💰 Tax check:', {
+            currentProfit,
+            requiresTax,
+            hasPaidTax,
+            taxThreshold
+        });
         
         if (requiresTax && !hasPaidTax) {
             const taxAmount = currentProfit * 0.1; // 10%
             
             return res.status(400).json({ 
-                error: 'Penarikan tidak dapat diproses',
-                message: 'Anda belum melakukan pembayaran pajak penghasilan',
+                error: 'Tax payment required',
+                message: 'You must pay income tax before withdrawal can be processed',
                 details: {
-                    totalProfit: formatCurrency(currentProfit),
-                    taxRequired: formatCurrency(taxAmount),
-                    taxPercentage: '10%',
-                    instruction: 'Silakan konfirmasi pembayaran pajak melalui CS TradeStation dan Livechat terlebih dahulu'
+                    totalProfit: currentProfit,
+                    taxRequired: taxAmount,
+                    taxPercentage: 10,
+                    threshold: taxThreshold,
+                    instruction: 'Please contact TradeStation Customer Service via LiveChat to confirm tax payment'
                 },
                 taxInfo: {
                     required: true,
                     amount: taxAmount,
                     percentage: 10,
-                    reason: 'Profit melebihi Rp 50,000,000'
+                    reason: `Profit exceeds ${formatCurrency(taxThreshold)}`
                 }
             });
         }
         
-        const feePercentage = 0.01;
+        // ✅ CALCULATE FEES
+        const feePercentage = 0.01; // 1%
         const minimumFee = 6500;
-        const fee = Math.max(minimumFee, amount * feePercentage);
-        const finalAmount = amount - fee;
+        const fee = Math.max(minimumFee, withdrawalAmount * feePercentage);
+        const finalAmount = withdrawalAmount - fee;
         
         if (finalAmount <= 0) {
-            return res.status(400).json({ error: 'Amount too small after fees' });
+            return res.status(400).json({ 
+                error: 'Amount too small after fees',
+                details: {
+                    requestedAmount: withdrawalAmount,
+                    fee: fee,
+                    finalAmount: finalAmount
+                }
+            });
         }
         
-        user.balance -= amount;
+        console.log('💳 Fee calculation:', {
+            withdrawalAmount,
+            fee,
+            finalAmount
+        });
+        
+        // ✅ UPDATE USER BALANCE
+        user.balance -= withdrawalAmount;
         await user.save();
         
+        // ✅ CREATE WITHDRAWAL RECORD
         const withdrawal = new Withdrawal({
             userId: req.userId,
-            amount,
+            amount: withdrawalAmount,
             fee,
             finalAmount,
             bankAccount: {
@@ -3030,9 +3106,17 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
         
         await withdrawal.save();
         
-        await logActivity(req.userId, 'WITHDRAWAL_REQUEST', `Withdrawal request: ${formatCurrency(amount)} (net: ${formatCurrency(finalAmount)})`, req);
+        // ✅ LOG ACTIVITY
+        await logActivity(
+            req.userId, 
+            'WITHDRAWAL_REQUEST', 
+            `Withdrawal request: ${formatCurrency(withdrawalAmount)} (net: ${formatCurrency(finalAmount)}) to ${user.bankData.bankName}`,
+            req
+        );
         
+        // ✅ SUCCESS RESPONSE
         res.status(201).json({
+            success: true,
             message: 'Withdrawal request submitted successfully',
             withdrawal: {
                 _id: withdrawal._id,
@@ -3043,14 +3127,40 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
                 status: withdrawal.status,
                 createdAt: withdrawal.createdAt
             },
-            newBalance: user.balance
+            newBalance: user.balance,
+            processing: {
+                estimatedTime: '1-24 hours',
+                workingDays: 'Monday - Friday',
+                note: 'Withdrawal will be processed during working hours'
+            }
         });
         
-        console.log(`✅ Withdrawal request: ${formatCurrency(amount)} from user ${user.name}`);
+        console.log(`✅ Withdrawal request created: ${formatCurrency(withdrawalAmount)} for user ${user.name}`);
         
     } catch (error) {
         console.error('❌ Withdrawal error:', error);
-        res.status(500).json({ error: 'Failed to submit withdrawal' });
+        
+        // ✅ ENHANCED ERROR RESPONSE
+        let errorMessage = 'Failed to submit withdrawal';
+        let statusCode = 500;
+        
+        if (error.name === 'ValidationError') {
+            errorMessage = 'Validation failed';
+            statusCode = 400;
+        } else if (error.name === 'CastError') {
+            errorMessage = 'Invalid data format';
+            statusCode = 400;
+        } else if (error.code === 11000) {
+            errorMessage = 'Duplicate withdrawal request';
+            statusCode = 409;
+        }
+        
+        res.status(statusCode).json({ 
+            error: errorMessage,
+            message: error.message,
+            timestamp: new Date().toISOString(),
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 });
 
@@ -3118,6 +3228,67 @@ app.get('/api/withdrawal/info', authenticateToken, async (req, res) => {
     }
 });
 
+// ✅ CEK WITHDRAWAL ELIGIBILITY
+app.get('/api/withdrawal/check', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId)
+            .select('balance totalProfit taxStatus bankData')
+            .lean();
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const currentProfit = user.totalProfit || 0;
+        const requiresTax = currentProfit > 50000000; // 50 juta
+        const taxAmount = requiresTax ? currentProfit * 0.1 : 0; // 10% pajak
+        const hasPaidTax = user.taxStatus?.isPaid || false;
+        
+        // Check if withdrawal is allowed
+        const canWithdraw = !requiresTax || hasPaidTax;
+        
+        const bankDataComplete = !!(
+            user.bankData?.bankName && 
+            user.bankData?.accountNumber && 
+            user.bankData?.accountHolder
+        );
+        
+        const withdrawalInfo = {
+            canWithdraw: canWithdraw && bankDataComplete,
+            balance: user.balance,
+            minimumWithdrawal: 100000,
+            maximumWithdrawal: 1000000000,
+            feePercentage: 1, // 1%
+            minimumFee: 6500,
+            bankDataComplete,
+            taxInfo: requiresTax ? {
+                required: true,
+                amount: taxAmount,
+                paid: hasPaidTax,
+                paidAt: user.taxStatus?.paidAt,
+                message: hasPaidTax 
+                    ? "Tax paid, withdrawal allowed"
+                    : "Tax payment required before withdrawal"
+            } : null,
+            restrictions: []
+        };
+        
+        if (!bankDataComplete) {
+            withdrawalInfo.restrictions.push("Complete bank data required");
+        }
+        
+        if (requiresTax && !hasPaidTax) {
+            withdrawalInfo.restrictions.push("Tax payment confirmation required");
+        }
+        
+        res.json(withdrawalInfo);
+        
+    } catch (error) {
+        console.error('❌ Withdrawal check error:', error);
+        res.status(500).json({ error: 'Failed to check withdrawal status' });
+    }
+});
+
 // 🆕 USER TAX STATUS ENDPOINT
 app.get('/api/user/tax-status', authenticateToken, async (req, res) => {
     try {
@@ -3151,6 +3322,56 @@ app.get('/api/user/tax-status', authenticateToken, async (req, res) => {
         };
         
         res.json(taxStatus);
+        
+    } catch (error) {
+        console.error('❌ Tax status error:', error);
+        res.status(500).json({ error: 'Failed to get tax status' });
+    }
+});
+
+/ 🆕 TAX STATUS ENDPOINT - TAMBAHKAN KODE INI
+app.get('/api/tax/status', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId)
+            .select('totalProfit taxStatus')
+            .lean();
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const currentProfit = user.totalProfit || 0;
+        const taxThreshold = 50000000; // 50 juta
+        const requiresTax = currentProfit > taxThreshold;
+        
+        if (!requiresTax) {
+            return res.status(404).json({ 
+                error: 'No tax required',
+                message: 'User profit is below tax threshold'
+            });
+        }
+        
+        const taxAmount = currentProfit * 0.1; // 10% tax
+        const isPaid = user.taxStatus?.isPaid || false;
+        
+        const taxData = {
+            requiresTax: true,
+            totalProfit: currentProfit,
+            taxAmount,
+            taxPercentage: 10,
+            isPaid,
+            paidAt: user.taxStatus?.paidAt,
+            confirmedBy: user.taxStatus?.confirmedBy,
+            notes: user.taxStatus?.notes || '',
+            threshold: taxThreshold,
+            message: isPaid 
+                ? 'Tax has been paid and confirmed'
+                : 'Tax payment required before withdrawal'
+        };
+        
+        res.json(taxData);
+        
+        console.log(`✅ Tax status checked for user: ${req.userId} - requires: ${requiresTax}, paid: ${isPaid}`);
         
     } catch (error) {
         console.error('❌ Tax status error:', error);
