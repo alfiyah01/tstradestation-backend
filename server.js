@@ -40,21 +40,21 @@ const io = socketIo(server, {
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false
-    crossOriginResourcePolicy: false
+
 }));
 
 app.use(cors({
     origin: [
-        // ✅ TAMBAHKAN HTTP DAN HTTPS VARIANTS
+        // ✅ DOMAIN UTAMA - HTTP & HTTPS
         "https://www.traderstasion.com",
         "https://traderstasion.com", 
-        "http://www.traderstasion.com",      // ✅ TAMBAH HTTP
-        "http://traderstasion.com",          // ✅ TAMBAH HTTP
+        "http://www.traderstasion.com",
+        "http://traderstasion.com",
         
         // Domain lama untuk backup
         "https://ts-tradestation.netlify.app",
         "https://tradestasion.com",
-        "http://tradestasion.com",           // ✅ TAMBAH HTTP
+        "http://tradestasion.com",
         
         // Development
         "http://localhost:3000", 
@@ -66,10 +66,19 @@ app.use(cors({
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
-    optionsSuccessStatus: 200 // ✅ TAMBAH UNTUK IE11
+    optionsSuccessStatus: 200
 }));
 
-// ✅ TAMBAH MANUAL CORS HEADERS SEBAGAI BACKUP
+// ✅ PREFLIGHT HANDLER
+app.options('*', cors());
+
+// ✅ DEBUG MIDDLEWARE
+app.use((req, res, next) => {
+    console.log(`🌐 ${req.method} ${req.path} from ${req.get('Origin') || req.get('Host')}`);
+    next();
+});
+
+// ✅ MANUAL CORS HEADERS SEBAGAI BACKUP
 app.use((req, res, next) => {
     const origin = req.headers.origin;
     const allowedOrigins = [
@@ -90,9 +99,8 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+    res.setHeader('Access-Control-Max-Age', '86400');
     
-    // Handle preflight
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -100,40 +108,30 @@ app.use((req, res, next) => {
     next();
 });
 
-console.log('✅ Enhanced CORS configuration applied');
-console.log('🌐 Allowed origins:', [
-    'http://traderstasion.com',
-    'https://traderstasion.com',
-    'http://www.traderstasion.com', 
-    'https://www.traderstasion.com'
-]);
+console.log('✅ Fixed CORS & Helmet configuration applied');
+console.log('🌐 Allowed origins include HTTP & HTTPS variants');
 
-// ✅ TAMBAH PREFLIGHT HANDLER
-app.options('*', cors());
+// ========================================
+// 🔧 ADDITIONAL ERROR HANDLING
+// ========================================
 
-// ✅ TAMBAH MIDDLEWARE UNTUK DEBUG CORS
-app.use((req, res, next) => {
-    console.log(`🌐 ${req.method} ${req.path} from ${req.get('Origin') || req.get('Host')}`);
-    next();
-});    
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
-    message: { error: 'Too many requests from this IP, please try again later.' }
+// ✅ TAMBAHAN: Global error handler untuk mencegah crash
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    console.error('Stack:', error.stack);
+    // Don't exit in production, just log
+    if (process.env.NODE_ENV !== 'production') {
+        process.exit(1);
+    }
 });
-app.use('/api/', limiter);
 
-// Auth rate limiting
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5,
-    message: { error: 'Too many authentication attempts, please try again later.' }
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise);
+    console.error('Reason:', reason);
+    // Don't exit, just log
 });
+
+console.log('✅ Enhanced error handling added');
 
 // ========================================
 // DATABASE MODELS - OPTIMIZED
