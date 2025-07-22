@@ -2168,26 +2168,165 @@ console.log('   • GET /api/admin/contracts/stats - Get contract statistics');
 // PUBLIC ROUTES
 // ========================================
 
-app.get('/', (req, res) => {
+app.get('/api', (req, res) => {
     res.json({
-        message: 'TradeStation Backend API - FIXED & OPTIMIZED',
+        message: 'TradeStation API - Dokumentasi Endpoint',
         version: '4.0.0',
         status: 'Running',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        fixes: [
-            '✅ Admin Panel: ALL FIXED & WORKING',
-            '✅ Database Queries: OPTIMIZED & FAST',
-            '✅ Error Handling: ENHANCED NULL CHECKS',
-            '✅ Search Functions: WORKING PROPERLY',
-            '✅ API Endpoints: ALL COMPLETE',
-            '✅ Mobile Responsive: ADMIN PANEL READY'
-        ],
-        adminInfo: {
-            email: 'admin@tradestation.com',
-            password: 'admin123',
-            note: 'Admin panel fully optimized and working'
-        }
+        
+        // 📋 Informasi dasar
+        info: {
+            name: 'TradeStation Backend API',
+            description: 'API untuk platform trading cryptocurrency',
+            environment: process.env.NODE_ENV || 'development',
+            adminEmail: 'admin@tradestation.com',
+            adminPassword: 'admin123'
+        },
+        
+        // 🔗 Endpoint yang tersedia
+        endpoints: {
+            // Public endpoints
+            public: {
+                health: {
+                    url: '/api/health',
+                    method: 'GET',
+                    description: 'Cek status server dan database'
+                },
+                prices: {
+                    url: '/api/prices',
+                    method: 'GET',
+                    description: 'Daftar harga cryptocurrency terkini'
+                },
+                chart: {
+                    url: '/api/chart/:symbol/:timeframe',
+                    method: 'GET',
+                    description: 'Data chart untuk symbol tertentu',
+                    example: '/api/chart/BTC/1m'
+                },
+                bankAccounts: {
+                    url: '/api/bank-accounts/active',
+                    method: 'GET',
+                    description: 'Daftar rekening bank aktif untuk deposit'
+                }
+            },
+            
+            // Auth endpoints
+            auth: {
+                register: {
+                    url: '/api/register',
+                    method: 'POST',
+                    description: 'Registrasi user baru',
+                    required: ['name', 'identifier', 'password']
+                },
+                login: {
+                    url: '/api/login',
+                    method: 'POST',
+                    description: 'Login user',
+                    required: ['email/phone', 'password']
+                }
+            },
+            
+            // User endpoints (butuh token)
+            user: {
+                profile: {
+                    url: '/api/profile',
+                    methods: ['GET', 'PUT'],
+                    description: 'Lihat/edit profil user'
+                },
+                trades: {
+                    url: '/api/trades',
+                    methods: ['GET', 'POST'],
+                    description: 'Lihat riwayat trading atau buat trade baru'
+                },
+                deposits: {
+                    url: '/api/deposits',
+                    methods: ['GET', 'POST'],
+                    description: 'Lihat riwayat deposit atau buat deposit baru'
+                },
+                withdrawals: {
+                    url: '/api/withdrawals',
+                    methods: ['GET', 'POST'],
+                    description: 'Lihat riwayat withdrawal atau buat withdrawal baru'
+                }
+            },
+            
+            // Admin endpoints (butuh token admin)
+            admin: {
+                dashboard: {
+                    url: '/api/admin/dashboard',
+                    method: 'GET',
+                    description: 'Dashboard statistik admin'
+                },
+                users: {
+                    url: '/api/admin/users',
+                    methods: ['GET', 'POST'],
+                    description: 'Kelola user (lihat daftar, tambah user baru)'
+                },
+                deposits: {
+                    url: '/api/admin/deposits',
+                    methods: ['GET', 'PUT'],
+                    description: 'Kelola deposit user (approve/reject)'
+                },
+                withdrawals: {
+                    url: '/api/admin/withdrawals',
+                    methods: ['GET', 'PUT'],
+                    description: 'Kelola withdrawal user'
+                },
+                trades: {
+                    url: '/api/admin/trades',
+                    methods: ['GET', 'PUT'],
+                    description: 'Kelola dan kontrol trading user'
+                },
+                bankAccounts: {
+                    url: '/api/admin/bank-accounts',
+                    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+                    description: 'Kelola rekening bank perusahaan'
+                },
+                contracts: {
+                    url: '/api/admin/contracts/*',
+                    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+                    description: 'Kelola template dan instance kontrak'
+                }
+            }
+        },
+        
+        // 🔐 Cara menggunakan API
+        authentication: {
+            info: 'Sebagian besar endpoint butuh token authentication',
+            howTo: {
+                step1: 'Login dulu ke /api/login',
+                step2: 'Ambil token dari response',
+                step3: 'Kirim token di header: Authorization: Bearer <token>'
+            },
+            adminAccess: {
+                email: 'admin@tradestation.com',
+                password: 'admin123',
+                note: 'Gunakan credentials ini untuk akses admin'
+            }
+        },
+        
+        // 📊 Status server
+        serverInfo: {
+            uptime: Math.floor(process.uptime()),
+            memory: {
+                used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+            },
+            database: {
+                status: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+                chartDataSets: chartDataStore ? chartDataStore.size : 0
+            }
+        },
+        
+        // 💡 Tips penggunaan
+        tips: [
+            'Gunakan /api/health untuk cek status server',
+            'Admin panel dapat diakses dengan credentials di atas',
+            'Semua response dalam format JSON',
+            'Error akan dikembalikan dengan status code yang sesuai',
+            'Gunakan HTTPS di production'
+        ]
     });
 });
 
