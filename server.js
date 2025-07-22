@@ -21,7 +21,15 @@ const server = http.createServer(app);
 // Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["https://www.traderstasion.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+        origin: [
+            "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
+            "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
+            "https://www.tradestasion.com",     // ⚠️ DOMAIN LAMA (untuk backup)
+            "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
+            "http://localhost:3000", 
+            "http://127.0.0.1:5500", 
+            "http://localhost:5500"
+        ],
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -35,11 +43,19 @@ app.use(helmet({
 }));
 
 app.use(cors({
-    origin: ["https://www.traderstasion.com", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+    origin: [
+        "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
+        "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
+        "https://www.tradestasion.com",     // ⚠️ DOMAIN LAMA (untuk backup)
+        "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
+        "http://localhost:3000", 
+        "http://127.0.0.1:5500", 
+        "http://localhost:5500"
+    ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization']
-}));
+}));    
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
