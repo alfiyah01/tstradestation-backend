@@ -24,7 +24,7 @@ const io = socketIo(server, {
         origin: [
             "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
             "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
-            "https://www.tradestasion.com",     // ⚠️ DOMAIN LAMA (untuk backup)
+            "https://ts-tradestation.netlify.app/",     // ⚠️ DOMAIN LAMA (untuk backup)
             "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
             "http://localhost:3000", 
             "http://127.0.0.1:5500", 
@@ -46,7 +46,7 @@ app.use(cors({
     origin: [
         "https://www.traderstasion.com",     // ✅ DOMAIN BARU (dengan 'r')
         "https://traderstasion.com",        // ✅ DOMAIN BARU tanpa www
-        "https://www.tradestasion.com",     // ⚠️ DOMAIN LAMA (untuk backup)
+        "https://ts-tradestation.netlify.app/",     // ⚠️ DOMAIN LAMA (untuk backup)
         "https://tradestasion.com",         // ⚠️ DOMAIN LAMA tanpa www
         "http://localhost:3000", 
         "http://127.0.0.1:5500", 
@@ -1854,7 +1854,7 @@ app.post('/api/admin/contracts/generate', authenticateToken, requireAdmin, async
         );
         
         // Generate access link
-        const contractLink = `${process.env.FRONTEND_URL || 'https://www.traderstasion.com'}/contract/${accessToken}`;
+        const contractLink = `${process.env.FRONTEND_URL || 'https://ts-tradestation.netlify.app/'}/contract/${accessToken}`;
         
         res.status(201).json({
             success: true,
