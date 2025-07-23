@@ -22,14 +22,26 @@ app.set('trust proxy', 1); // Trust first proxy only
 
 const server = http.createServer(app);
 
-// Socket.IO setup dengan CORS
+// ✅ ENHANCED SOCKET.IO CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["https://www.traderstasion.com/", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
-        methods: ["GET", "POST"],
-        credentials: true
+        origin: [
+            "https://www.traderstasion.com",
+            "https://traderstasion.com", 
+            "https://www.traderstasion.com/",
+            "https://traderstasion.com/",
+            "http://localhost:3000", 
+            "http://127.0.0.1:5500", 
+            "http://localhost:5500"
+        ],
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        credentials: true,
+        allowEIO3: true
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
 // Middleware
@@ -38,15 +50,67 @@ app.use(helmet({
     crossOriginEmbedderPolicy: false
 }));
 
+// ✅ ENHANCED CORS CONFIGURATION
 app.use(cors({
-    origin: ["https://www.traderstasion.com/", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+    origin: [
+        "https://www.traderstasion.com",
+        "https://traderstasion.com", 
+        "https://www.traderstasion.com/",
+        "https://traderstasion.com/",
+        "http://localhost:3000", 
+        "http://127.0.0.1:5500", 
+        "http://localhost:5500",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080"
+    ],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With', 
+        'Accept',
+        'Origin',
+        'Access-Control-Request-Method',
+        'Access-Control-Request-Headers'
+    ],
+    exposedHeaders: ['Content-Length', 'X-Requested-With'],
+    optionsSuccessStatus: 200,
+    preflightContinue: false
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// ✅ TAMBAHKAN MIDDLEWARE CORS MANUAL UNTUK HANDLE PREFLIGHT
+app.use((req, res, next) => {
+    const allowedOrigins = [
+        "https://www.traderstasion.com",
+        "https://traderstasion.com", 
+        "https://www.traderstasion.com/",
+        "https://traderstasion.com/",
+        "http://localhost:3000", 
+        "http://127.0.0.1:5500", 
+        "http://localhost:5500"
+    ];
+    
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
+    }
+    
+    next();
+});
 
 // Rate limiting
 const limiter = rateLimit({
@@ -2303,6 +2367,48 @@ app.get('/api/health', (req, res) => {
     
     const statusCode = mongoose.connection.readyState === 1 ? 200 : 503;
     res.status(statusCode).json(health);
+});
+
+// ✅ ENHANCED HEALTH CHECK DENGAN CORS HEADERS
+app.get('/api/health', (req, res) => {
+    // ✅ SET CORS HEADERS MANUAL
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    
+    const health = {
+        status: 'OK', 
+        message: 'TradeStation Backend - FIXED & OPTIMIZED',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        cors: {
+            origin: req.headers.origin,
+            allowed: true,
+            timestamp: new Date().toISOString()
+        },
+        database: {
+            status: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
+            readyState: mongoose.connection.readyState
+        },
+        server: {
+            port: process.env.PORT || 3000,
+            uptime: process.uptime(),
+            memory: process.memoryUsage()
+        }
+    };
+    
+    const statusCode = mongoose.connection.readyState === 1 ? 200 : 503;
+    res.status(statusCode).json(health);
+});
+
+// ✅ TAMBAHKAN CORS PREFLIGHT HANDLER
+app.options('/api/*', (req, res) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    res.status(200).end();
 });
 
 // ✅ ADMIN DEBUG ROUTES
