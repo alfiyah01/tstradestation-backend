@@ -19,11 +19,19 @@ const server = http.createServer(app);
 // Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["https://www.traderstasion.com/", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+        origin: [
+            "https://www.traderstasion.com",
+            "https://traderstasion.com", 
+            "http://localhost:3000", 
+            "http://127.0.0.1:5500", 
+            "http://localhost:5500"
+        ],
         methods: ["GET", "POST"],
-        credentials: true
+        credentials: true,
+        allowedHeaders: ["Content-Type", "Authorization"]
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    allowEIO3: true
 });
 
 // Middleware
@@ -33,14 +41,49 @@ app.use(helmet({
 }));
 
 app.use(cors({
-    origin: ["https://www.traderstasion.com/", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
+    origin: [
+        "https://www.traderstasion.com",        // ✅ TANPA trailing slash
+        "https://traderstasion.com",            // ✅ Tanpa www
+        "http://localhost:3000", 
+        "http://127.0.0.1:5500", 
+        "http://localhost:5500",
+        "http://localhost:8080"                 // ✅ Tambahan untuk development
+    ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'Access-Control-Allow-Origin'],
+    optionsSuccessStatus: 200,                  // ✅ Untuk legacy browser support
+    preflightContinue: false                    // ✅ Untuk handle preflight
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+app.use((req, res, next) => {
+    const allowedOrigins = [
+        'https://www.traderstasion.com',
+        'https://traderstasion.com',
+        'http://localhost:3000',
+        'http://127.0.0.1:5500',
+        'http://localhost:5500'
+    ];
+    
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Access-Control-Allow-Headers, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
+    }
+    
+    next();
+});
 
 // Rate limiting
 const limiter = rateLimit({
