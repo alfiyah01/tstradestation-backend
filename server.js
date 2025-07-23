@@ -5314,6 +5314,7 @@ function gracefulShutdown(signal) {
             process.exit(0);
         });
     });
+}
     
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
@@ -5482,34 +5483,34 @@ async function startServer() {
     }
 }
 
-// ✅ VERSI FINAL - LETAKKAN DI AKHIR FILE SEBELUM startServer()
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise);
-    console.error('Reason:', reason);
-    
-    // Jangan exit di production, hanya log
-    if (process.env.NODE_ENV === 'production') {
-        console.log('🔄 Continuing execution in production mode');
-    } else {
-        console.log('🔄 Development mode - logging only');
-    }
-});
+        // ✅ VERSI FINAL - LETAKKAN DI AKHIR FILE SEBELUM startServer()
+        process.on('unhandledRejection', (reason, promise) => {
+            console.error('❌ Unhandled Rejection at:', promise);
+            console.error('Reason:', reason);
+            
+            // Jangan exit di production, hanya log
+            if (process.env.NODE_ENV === 'production') {
+                console.log('🔄 Continuing execution in production mode');
+            } else {
+                console.log('🔄 Development mode - logging only');
+            }
+        });
 
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    console.error('Stack trace:', error.stack);
-    
-    // Graceful shutdown attempt
-    if (process.env.NODE_ENV === 'production') {
-        console.log('🔄 Attempting graceful shutdown...');
-        // Jangan langsung exit, beri waktu cleanup
-        setTimeout(() => {
-            process.exit(1);
-        }, 5000);
-    } else {
-        process.exit(1);
-    }
-});
+        process.on('uncaughtException', (error) => {
+            console.error('❌ Uncaught Exception:', error);
+            console.error('Stack trace:', error.stack);
+            
+            // Graceful shutdown attempt
+            if (process.env.NODE_ENV === 'production') {
+                console.log('🔄 Attempting graceful shutdown...');
+                // Jangan langsung exit, beri waktu cleanup
+                setTimeout(() => {
+                    process.exit(1);
+                }, 5000);
+            } else {
+                process.exit(1);
+            }
+        });
 
 // ✅ FIXED: Start server dan export dengan struktur yang benar
 startServer();
