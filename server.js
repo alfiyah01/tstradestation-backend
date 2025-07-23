@@ -1345,14 +1345,6 @@ setInterval(() => {
     }
 }, 30000);
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    process.exit(1);
-});
 
 // ✅ ENHANCED ENSURE INDEXES FUNCTION
 async function ensureIndexes() {
@@ -2182,6 +2174,21 @@ console.log('   • GET /api/admin/contracts/stats - Get contract statistics');
 // PUBLIC ROUTES
 // ========================================
 
+// ✅ ROUTE HOMEPAGE - TAMBAHKAN INI
+app.get('/', (req, res) => {
+    res.json({
+        status: 'OK',
+        message: 'TradeStation Backend Server',
+        version: '4.0.0',
+        endpoints: {
+            documentation: '/api',
+            health: '/api/health',
+            admin: '/api/admin/dashboard'
+        },
+        timestamp: new Date().toISOString()
+    });
+});
+
 app.get('/api', (req, res) => {
     res.json({
         message: 'TradeStation API - Dokumentasi Endpoint',
@@ -2342,31 +2349,6 @@ app.get('/api', (req, res) => {
             'Gunakan HTTPS di production'
         ]
     });
-});
-
-app.get('/api/health', (req, res) => {
-    const health = {
-        status: 'OK', 
-        message: 'TradeStation Backend - FIXED & OPTIMIZED',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        database: {
-            status: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
-            readyState: mongoose.connection.readyState
-        },
-        server: {
-            port: process.env.PORT || 3000,
-            uptime: process.uptime(),
-            memory: process.memoryUsage()
-        },
-        features: {
-            chartDataSets: chartDataStore.size,
-            initialized: isInitialized
-        }
-    };
-    
-    const statusCode = mongoose.connection.readyState === 1 ? 200 : 503;
-    res.status(statusCode).json(health);
 });
 
 // ✅ ENHANCED HEALTH CHECK DENGAN CORS HEADERS
@@ -5333,34 +5315,9 @@ function gracefulShutdown(signal) {
         });
     });
     
-    // ✅ FORCE EXIT IF GRACEFUL SHUTDOWN TAKES TOO LONG
-    setTimeout(() => {
-        console.error('❌ Forced shutdown due to timeout');
-        process.exit(1);
-    }, 10000);
-}
-
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// ✅ ENHANCED UNCAUGHT EXCEPTION HANDLER
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    console.error('Stack trace:', error.stack);
-    
-    // ✅ ATTEMPT GRACEFUL SHUTDOWN
-    gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise);
-    console.error('Reason:', reason);
-    
-    // ✅ LOG BUT DON'T EXIT FOR UNHANDLED REJECTIONS
-    if (process.env.NODE_ENV === 'production') {
-        console.log('🔄 Continuing execution in production mode');
-    }
-});
 
 // ========================================
 // ✅ ENHANCED SERVER STARTUP - SUPER OPTIMIZED
@@ -5524,6 +5481,35 @@ async function startServer() {
         process.exit(1);
     }
 }
+
+// ✅ VERSI FINAL - LETAKKAN DI AKHIR FILE SEBELUM startServer()
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise);
+    console.error('Reason:', reason);
+    
+    // Jangan exit di production, hanya log
+    if (process.env.NODE_ENV === 'production') {
+        console.log('🔄 Continuing execution in production mode');
+    } else {
+        console.log('🔄 Development mode - logging only');
+    }
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    console.error('Stack trace:', error.stack);
+    
+    // Graceful shutdown attempt
+    if (process.env.NODE_ENV === 'production') {
+        console.log('🔄 Attempting graceful shutdown...');
+        // Jangan langsung exit, beri waktu cleanup
+        setTimeout(() => {
+            process.exit(1);
+        }, 5000);
+    } else {
+        process.exit(1);
+    }
+});
 
 // ✅ FIXED: Start server dan export dengan struktur yang benar
 startServer();
