@@ -8,6 +8,12 @@ const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
+const {
+    ValidationUtils,
+    ResponseUtils,
+    UserUtils,
+    ActivityLogger
+} = require('./server-utils');
 
 const app = express();
 
@@ -19,19 +25,11 @@ const server = http.createServer(app);
 // Socket.IO setup dengan CORS
 const io = socketIo(server, {
     cors: {
-        origin: [
-            "https://www.traderstasion.com",
-            "https://traderstasion.com", 
-            "http://localhost:3000", 
-            "http://127.0.0.1:5500", 
-            "http://localhost:5500"
-        ],
+        origin: ["https://www.traderstasion.com/", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
         methods: ["GET", "POST"],
-        credentials: true,
-        allowedHeaders: ["Content-Type", "Authorization"]
+        credentials: true
     },
-    transports: ['websocket', 'polling'],
-    allowEIO3: true
+    transports: ['websocket', 'polling']
 });
 
 // Middleware
@@ -41,49 +39,14 @@ app.use(helmet({
 }));
 
 app.use(cors({
-    origin: [
-        "https://www.traderstasion.com",        // ✅ TANPA trailing slash
-        "https://traderstasion.com",            // ✅ Tanpa www
-        "http://localhost:3000", 
-        "http://127.0.0.1:5500", 
-        "http://localhost:5500",
-        "http://localhost:8080"                 // ✅ Tambahan untuk development
-    ],
+    origin: ["https://www.traderstasion.com/", "http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5500"],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Access-Control-Allow-Origin'],
-    optionsSuccessStatus: 200,                  // ✅ Untuk legacy browser support
-    preflightContinue: false                    // ✅ Untuk handle preflight
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-app.use((req, res, next) => {
-    const allowedOrigins = [
-        'https://www.traderstasion.com',
-        'https://traderstasion.com',
-        'http://localhost:3000',
-        'http://127.0.0.1:5500',
-        'http://localhost:5500'
-    ];
-    
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-    }
-    
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Access-Control-Allow-Headers, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    
-    if (req.method === 'OPTIONS') {
-        res.status(200).end();
-        return;
-    }
-    
-    next();
-});
 
 // Rate limiting
 const limiter = rateLimit({
@@ -532,31 +495,6 @@ async function createAdminUser() {
 // Chart Data Management
 let chartDataStore = new Map();
 let isInitialized = false;
-
-function generateReferralCode() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-// ✅ ENHANCED ACTIVITY LOGGING
-async function logActivity(userId, action, details = '', req = null) {
-    try {
-        const activityData = {
-            userId,
-            action,
-            details
-        };
-        
-        if (req) {
-            activityData.ip = req.ip || req.connection.remoteAddress;
-            activityData.userAgent = req.get('User-Agent');
-        }
-        
-        await Activity.create(activityData);
-        console.log(`📝 Activity logged: ${action} - ${details}`);
-    } catch (error) {
-        console.error('❌ Error logging activity:', error);
-    }
-}
 
 function getTimeframeMinutes(timeframe) {
     const timeframes = {
@@ -1034,37 +972,6 @@ function formatCurrency(amount) {
         minimumFractionDigits: 0,
         maximumFractionDigits: 0
     }).format(amount || 0);
-}
-
-// ✅ VALIDATION FUNCTIONS
-function isValidEmail(email) {
-    if (!email || typeof email !== 'string') return false;
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email.trim());
-}
-
-function isValidPhone(phone) {
-    if (!phone || typeof phone !== 'string') return false;
-    
-    const cleanPhone = phone.trim().replace(/[\s\-\(\)]/g, '');
-    const phoneRegex = /^(\+?628\d{8,11}|08\d{8,11})$/;
-    
-    return phoneRegex.test(cleanPhone);
-}
-
-function normalizePhone(phone) {
-    if (!phone) return null;
-    let cleaned = phone.replace(/[\s\-\(\)\+]/g, '');
-    if (cleaned.startsWith('08')) {
-        return '628' + cleaned.substring(2);
-    }
-    if (cleaned.startsWith('8') && cleaned.length >= 10) {
-        return '62' + cleaned;
-    }
-    if (cleaned.startsWith('62')) {
-        return cleaned;
-    }
-    return cleaned;
 }
 
 function formatPhoneNumber(phone) {
@@ -2567,196 +2474,129 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
         console.log('📝 Registration attempt:', { 
             name: name || 'none', 
             identifier: identifier || 'none',
-            hasPassword: !!password,
-            timestamp: new Date().toISOString()
+            hasPassword: !!password
         });
 
-        if (!name || !identifier || !password) {
-            console.log('❌ Missing required fields');
-            return res.status(400).json({ 
-                error: 'Nama, email/nomor HP, dan password wajib diisi' 
-            });
-        }
-
-        const trimmedName = name.trim();
-        const trimmedIdentifier = identifier.trim();
-
-        if (trimmedName.length < 2) {
-            return res.status(400).json({ 
-                error: 'Nama harus minimal 2 karakter' 
-            });
-        }
-
-        if (password.length < 6) {
-            return res.status(400).json({ 
-                error: 'Password harus minimal 6 karakter' 
-            });
-        }
-
-        const isEmail = trimmedIdentifier.includes('@');
-        console.log(`📧 Contact type: ${isEmail ? 'Email' : 'Phone'}`);
-
-        if (isEmail) {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(trimmedIdentifier)) {
-                return res.status(400).json({ 
-                    error: 'Format email tidak valid' 
-                });
-            }
-        } else {
-            const cleanPhone = trimmedIdentifier.replace(/[\s\-\(\)\+]/g, '');
-            if (!/^[0-9]{10,15}$/.test(cleanPhone)) {
-                return res.status(400).json({ 
-                    error: 'Nomor HP harus 10-15 digit angka' 
-                });
-            }
-        }
-
-        let normalizedIdentifier;
-        if (isEmail) {
-            normalizedIdentifier = trimmedIdentifier.toLowerCase();
-        } else {
-            let cleanPhone = trimmedIdentifier.replace(/[\s\-\(\)\+]/g, '');
-            if (cleanPhone.startsWith('08')) {
-                normalizedIdentifier = '628' + cleanPhone.substring(2);
-            } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
-                normalizedIdentifier = '62' + cleanPhone;
-            } else if (cleanPhone.startsWith('62')) {
-                normalizedIdentifier = cleanPhone;
-            } else {
-                normalizedIdentifier = cleanPhone;
-            }
-        }
-
-        console.log(`🔄 Normalized: ${normalizedIdentifier}`);
-
-        let existingUser = null;
+        // ✅ CENTRALIZED VALIDATION
+        const validationErrors = [];
         
-        try {
-            if (isEmail) {
-                existingUser = await User.findOne({ email: normalizedIdentifier });
-            } else {
-                existingUser = await User.findOne({ phone: normalizedIdentifier });
-            }
-        } catch (dbError) {
-            console.error('❌ Database check error:', dbError);
-            return res.status(500).json({ 
-                error: 'Database error. Silakan coba lagi.' 
-            });
+        if (!ValidationUtils.name.isValid(name)) {
+            validationErrors.push('Nama harus minimal 2 karakter');
+        }
+        
+        if (!identifier) {
+            validationErrors.push('Email atau nomor HP wajib diisi');
+        }
+        
+        if (!ValidationUtils.password.isValid(password)) {
+            validationErrors.push('Password harus minimal 6 karakter');
+        }
+        
+        if (validationErrors.length > 0) {
+            return ResponseUtils.validationError(res, validationErrors);
         }
 
-        if (existingUser) {
-            console.log('❌ User already exists');
-            return res.status(400).json({ 
-                error: isEmail ? 'Email sudah terdaftar' : 'Nomor HP sudah terdaftar' 
-            });
+        // ✅ NORMALIZE IDENTIFIERS
+        const normalizedName = ValidationUtils.name.normalize(name);
+        const normalizedEmail = ValidationUtils.email.isValid(identifier) 
+            ? ValidationUtils.email.normalize(identifier) : null;
+        const normalizedPhone = ValidationUtils.phone.isValid(identifier) 
+            ? ValidationUtils.phone.normalize(identifier) : null;
+
+        if (!normalizedEmail && !normalizedPhone) {
+            return ResponseUtils.validationError(res, 'Format email atau nomor HP tidak valid');
         }
 
+        // ✅ CHECK UNIQUE IDENTIFIERS
+        const uniqueErrors = await UserUtils.validateUniqueIdentifier(
+            normalizedEmail, 
+            normalizedPhone, 
+            User
+        );
+        
+        if (uniqueErrors.length > 0) {
+            return ResponseUtils.validationError(res, uniqueErrors);
+        }
+
+        // ✅ CREATE USER
         const hashedPassword = await bcrypt.hash(password, 12);
-
+        const referralCode = await UserUtils.generateUniqueReferralCode(User);
+        
         const userData = {
-            name: trimmedName,
+            name: normalizedName,
+            email: normalizedEmail,
+            phone: normalizedPhone,
             password: hashedPassword,
-            referralCode: generateReferralCode(),
+            referralCode,
             balance: 0,
             isActive: true,
             totalProfit: 0,
-            totalLoss: 0
+            totalLoss: 0,
+            adminSettings: {
+                forceWin: false,
+                forceWinRate: 0,
+                profitCollapse: 'normal',
+                profitPercentage: 80
+            },
+            stats: {
+                totalTrades: 0,
+                winTrades: 0,
+                loseTrades: 0
+            },
+            bankData: {
+                bankName: '',
+                accountNumber: '',
+                accountHolder: ''
+            }
         };
 
-        if (isEmail) {
-            userData.email = normalizedIdentifier;
-            userData.phone = null;
-        } else {
-            userData.phone = normalizedIdentifier;
-            userData.email = null;
-        }
+        const savedUser = await User.create(userData);
 
-        console.log('💾 Creating user with data:', {
-            name: userData.name,
-            email: userData.email,
-            phone: userData.phone,
-            hasPassword: !!userData.password
-        });
+        // ✅ LOG ACTIVITY
+        await ActivityLogger.log(
+            savedUser._id, 
+            'USER_REGISTER',
+            `New user registered: ${normalizedEmail || normalizedPhone}`,
+            req,
+            Activity
+        );
 
-        let savedUser;
-        try {
-            const user = new User(userData);
-            savedUser = await user.save();
-            console.log('✅ User saved to database');
-        } catch (saveError) {
-            console.error('❌ User save error:', saveError);
-            
-            if (saveError.code === 11000) {
-                const field = saveError.message.includes('email') ? 'Email' : 'Nomor HP';
-                return res.status(400).json({ 
-                    error: `${field} sudah terdaftar dalam sistem` 
-                });
-            }
-            
-            return res.status(500).json({ 
-                error: 'Gagal menyimpan data. Silakan coba lagi.' 
-            });
-        }
-
-        try {
-            await logActivity(savedUser._id, 'USER_REGISTER', `New user registered: ${normalizedIdentifier}`, req);
-        } catch (logError) {
-            console.error('❌ Activity log error:', logError);
-        }
-
+        // ✅ GENERATE TOKEN
         const token = jwt.sign(
             { userId: savedUser._id },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
 
-        console.log(`✅ Registration successful`);
+        // ✅ SUCCESS RESPONSE
+        const userResponse = savedUser.toObject();
+        delete userResponse.password;
 
-        res.status(201).json({
-            message: 'Registrasi berhasil',
+        ResponseUtils.success(res, {
             token,
-            user: {
-                _id: savedUser._id,
-                id: savedUser._id,
-                name: savedUser.name,
-                email: savedUser.email,
-                phone: savedUser.phone,
-                balance: savedUser.balance,
-                referralCode: savedUser.referralCode,
-                accountType: savedUser.accountType || 'standard',
-                isActive: savedUser.isActive,
-                status: 'active'
-            }
-        });
+            user: userResponse
+        }, 'Registrasi berhasil', 201);
         
     } catch (error) {
         console.error('❌ Registration error:', error);
         
-        let errorMessage = 'Server error. Silakan coba lagi.';
-        let statusCode = 500;
-        
-        if (error.name === 'ValidationError') {
-            errorMessage = 'Data tidak valid. Periksa input Anda.';
-            statusCode = 400;
-        } else if (error.name === 'MongoNetworkError') {
-            errorMessage = 'Koneksi database bermasalah. Silakan coba lagi.';
-            statusCode = 503;
-        } else if (error.code === 11000) {
-            errorMessage = 'Data sudah terdaftar dalam sistem';
-            statusCode = 400;
+        if (error.code === 11000) {
+            return ResponseUtils.validationError(res, 'Data sudah terdaftar dalam sistem');
         }
         
-        res.status(statusCode).json({ 
-            error: errorMessage,
-            timestamp: new Date().toISOString()
-        });
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(e => e.message);
+            return ResponseUtils.validationError(res, validationErrors);
+        }
+        
+        ResponseUtils.error(res, 'Server error. Silakan coba lagi.');
     }
 });
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
         const { email, phone, password } = req.body;
+        const identifier = email || phone;
         
         console.log('📝 Login attempt:', { 
             email: email || 'none', 
@@ -2764,75 +2604,55 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             hasPassword: !!password
         });
         
-        if (!password) {
-            return res.status(400).json({ error: 'Password diperlukan' });
+        // ✅ BASIC VALIDATION
+        if (!identifier || !password) {
+            return ResponseUtils.validationError(res, 'Email/HP dan password diperlukan');
         }
 
-        if (!email && !phone) {
-            return res.status(400).json({ error: 'Email atau nomor HP diperlukan' });
+        // ✅ FIND USER BY IDENTIFIER
+        const user = await UserUtils.findByIdentifier(identifier, User);
+        
+        if (!user || !user.isActive) {
+            return ResponseUtils.error(res, 'Email/HP atau password salah', 401);
         }
-        
-        let user = null;
-        
-        if (email && isValidEmail(email)) {
-            user = await User.findOne({ email: email.toLowerCase().trim() });
-            console.log('📧 Email search result:', !!user);
-        }
-        
-        if (!user && phone && isValidPhone(phone)) {
-            let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
-            let normalizedPhone = cleanPhone;
-            
-            if (cleanPhone.startsWith('08')) {
-                normalizedPhone = '628' + cleanPhone.substring(2);
-            } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
-                normalizedPhone = '62' + cleanPhone;
-            } else if (cleanPhone.startsWith('62')) {
-                normalizedPhone = cleanPhone;
-            }
-            
-            user = await User.findOne({ phone: normalizedPhone });
-            console.log('📱 Phone search result:', !!user, 'searched for:', normalizedPhone);
-        }
-        
-        if (!user) {
-            return res.status(400).json({ error: 'Email/HP atau password salah' });
-        }
-        
-        if (!user.isActive) {
-            return res.status(400).json({ error: 'Akun dinonaktifkan. Hubungi customer service.' });
-        }
-        
+
+        // ✅ PASSWORD VALIDATION
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
-            return res.status(400).json({ error: 'Email/HP atau password salah' });
+            return ResponseUtils.error(res, 'Email/HP atau password salah', 401);
         }
-        
-        user.lastLoginAt = new Date();
-        await user.save();
-        
-        await logActivity(user._id, 'USER_LOGIN', `User logged in: ${email || phone}`, req);
-        
+
+        // Update last login
+        await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
+
+        // ✅ LOG ACTIVITY
+        await ActivityLogger.log(
+            user._id, 
+            'USER_LOGIN',
+            `User logged in: ${identifier}`,
+            req,
+            Activity
+        );
+
+        // ✅ GENERATE TOKEN
         const token = jwt.sign(
             { userId: user._id },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
-        
-        const userResponse = user.toObject();
+
+        // ✅ SUCCESS RESPONSE
+        const userResponse = { ...user };
         delete userResponse.password;
-        
-        res.json({
-            message: 'Login berhasil',
+
+        ResponseUtils.success(res, {
             token,
             user: userResponse
-        });
-        
-        console.log(`✅ User logged in successfully: ${email || phone}`);
+        }, 'Login berhasil');
         
     } catch (error) {
         console.error('❌ Login error:', error);
-        res.status(500).json({ error: 'Login gagal. Silakan coba lagi.' });
+        ResponseUtils.error(res, 'Login gagal. Silakan coba lagi.');
     }
 });
 
@@ -4941,17 +4761,8 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
             password, 
             balance = 0, 
             accountType = 'standard',
-            adminSettings = {
-                forceWin: false,
-                forceWinRate: 0,
-                profitCollapse: 'normal',
-                profitPercentage: 80
-            },
-            bankData = {
-                bankName: '',
-                accountNumber: '',
-                accountHolder: ''
-            },
+            adminSettings = {},
+            bankData = {},
             isActive = true
         } = req.body;
 
@@ -4962,128 +4773,66 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
             adminBy: req.user.name
         });
 
-        // ✅ VALIDASI INPUT
-        if (!name || name.trim().length < 2) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Nama harus minimal 2 karakter' 
-            });
+        // ✅ CENTRALIZED VALIDATION
+        const validationErrors = [];
+        
+        if (!ValidationUtils.name.isValid(name)) {
+            validationErrors.push('Nama harus minimal 2 karakter');
         }
-
+        
         if (!email && !phone) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Email atau nomor HP wajib diisi' 
-            });
+            validationErrors.push('Email atau nomor HP wajib diisi');
         }
-
-        if (!password || password.length < 6) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Password harus minimal 6 karakter' 
-            });
+        
+        if (email && !ValidationUtils.email.isValid(email)) {
+            validationErrors.push('Format email tidak valid');
         }
-
-        // ✅ VALIDASI EMAIL (jika ada)
-        if (email) {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email.trim())) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Format email tidak valid' 
-                });
-            }
+        
+        if (phone && !ValidationUtils.phone.isValid(phone)) {
+            validationErrors.push('Format nomor HP tidak valid');
         }
-
-        // ✅ VALIDASI PHONE (jika ada)
-        if (phone) {
-            const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
-            if (!/^[0-9]{10,15}$/.test(cleanPhone)) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Nomor HP harus 10-15 digit angka' 
-                });
-            }
+        
+        if (!ValidationUtils.password.isValid(password)) {
+            validationErrors.push('Password harus minimal 6 karakter');
         }
-
-        // ✅ VALIDASI BALANCE
+        
         const userBalance = parseFloat(balance);
         if (isNaN(userBalance) || userBalance < 0) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Balance harus berupa angka positif' 
-            });
+            validationErrors.push('Balance harus berupa angka positif');
         }
-
-        // ✅ NORMALISASI DATA
-        let normalizedEmail = null;
-        let normalizedPhone = null;
-
-        if (email) {
-            normalizedEmail = email.toLowerCase().trim();
-        }
-
-        if (phone) {
-            let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
-            if (cleanPhone.startsWith('08')) {
-                normalizedPhone = '628' + cleanPhone.substring(2);
-            } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
-                normalizedPhone = '62' + cleanPhone;
-            } else if (cleanPhone.startsWith('62')) {
-                normalizedPhone = cleanPhone;
-            } else {
-                normalizedPhone = cleanPhone;
-            }
-        }
-
-        // ✅ CEK USER SUDAH ADA
-        let existingUser = null;
         
-        if (normalizedEmail) {
-            existingUser = await User.findOne({ email: normalizedEmail });
-            if (existingUser) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Email sudah terdaftar dalam sistem' 
-                });
-            }
+        if (validationErrors.length > 0) {
+            return ResponseUtils.validationError(res, validationErrors);
         }
 
-        if (normalizedPhone) {
-            existingUser = await User.findOne({ phone: normalizedPhone });
-            if (existingUser) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Nomor HP sudah terdaftar dalam sistem' 
-                });
-            }
+        // ✅ NORMALIZE DATA
+        const normalizedEmail = email ? ValidationUtils.email.normalize(email) : null;
+        const normalizedPhone = phone ? ValidationUtils.phone.normalize(phone) : null;
+
+        // ✅ CHECK UNIQUE IDENTIFIERS
+        const uniqueErrors = await UserUtils.validateUniqueIdentifier(
+            normalizedEmail, 
+            normalizedPhone, 
+            User
+        );
+        
+        if (uniqueErrors.length > 0) {
+            return ResponseUtils.validationError(res, uniqueErrors);
         }
 
-        // ✅ HASH PASSWORD
+        // ✅ CREATE USER
         const hashedPassword = await bcrypt.hash(password, 12);
-
-        // ✅ GENERATE REFERRAL CODE
-        let referralCode;
-        let isReferralUnique = false;
+        const referralCode = await UserUtils.generateUniqueReferralCode(User);
         
-        while (!isReferralUnique) {
-            referralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-            const existingReferral = await User.findOne({ referralCode });
-            if (!existingReferral) {
-                isReferralUnique = true;
-            }
-        }
-
-        // ✅ BUAT USER DATA
         const userData = {
-            name: name.trim(),
+            name: ValidationUtils.name.normalize(name),
             email: normalizedEmail,
             phone: normalizedPhone,
             password: hashedPassword,
+            referralCode,
             balance: userBalance,
             accountType: ['standard', 'premium'].includes(accountType) ? accountType : 'standard',
             isActive: Boolean(isActive),
-            referralCode,
             totalProfit: 0,
             totalLoss: 0,
             adminSettings: {
@@ -5105,73 +4854,44 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
             }
         };
 
-        console.log('💾 Creating user with admin settings:', {
-            name: userData.name,
-            email: userData.email,
-            phone: userData.phone,
-            balance: userData.balance,
-            accountType: userData.accountType,
-            isActive: userData.isActive
-        });
-
-        // ✅ SIMPAN USER KE DATABASE
-        const newUser = new User(userData);
-        const savedUser = await newUser.save();
+        const savedUser = await User.create(userData);
 
         // ✅ LOG ACTIVITY
-        await logActivity(
+        await ActivityLogger.log(
             req.userId, 
-            'ADMIN_USER_CREATE', 
-            `Created user: ${savedUser.name} (${savedUser.email || savedUser.phone}) with balance ${formatCurrency(savedUser.balance)}`,
-            req
+            'ADMIN_USER_CREATE',
+            `Created user: ${savedUser.name} (${normalizedEmail || normalizedPhone}) with balance ${formatCurrency(userBalance)}`,
+            req,
+            Activity
         );
 
-        // ✅ RESPONSE SUCCESS
+        // ✅ SUCCESS RESPONSE
         const userResponse = savedUser.toObject();
-        delete userResponse.password; // Hapus password dari response
+        delete userResponse.password;
 
-        res.status(201).json({
-            success: true,
-            message: 'User berhasil dibuat oleh admin',
+        ResponseUtils.success(res, {
             user: userResponse,
             metadata: {
                 createdBy: req.user.name,
                 createdAt: new Date().toISOString(),
                 initialBalance: userBalance,
-                referralCode: referralCode
+                referralCode
             }
-        });
-
-        console.log(`✅ User created by admin: ${savedUser.name} with balance ${formatCurrency(savedUser.balance)}`);
+        }, 'User berhasil dibuat oleh admin', 201);
 
     } catch (error) {
         console.error('❌ Admin create user error:', error);
         
-        // ✅ HANDLE SPECIFIC ERRORS
-        let errorMessage = 'Gagal membuat user';
-        let statusCode = 500;
-        
         if (error.code === 11000) {
-            if (error.message.includes('email')) {
-                errorMessage = 'Email sudah terdaftar dalam sistem';
-            } else if (error.message.includes('phone')) {
-                errorMessage = 'Nomor HP sudah terdaftar dalam sistem';
-            } else if (error.message.includes('referralCode')) {
-                errorMessage = 'Referral code conflict, silakan coba lagi';
-            } else {
-                errorMessage = 'Data sudah ada dalam sistem';
-            }
-            statusCode = 400;
-        } else if (error.name === 'ValidationError') {
-            errorMessage = 'Data tidak valid: ' + Object.values(error.errors).map(e => e.message).join(', ');
-            statusCode = 400;
+            return ResponseUtils.validationError(res, 'Data sudah ada dalam sistem');
         }
         
-        res.status(statusCode).json({ 
-            success: false,
-            error: errorMessage,
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+        if (error.name === 'ValidationError') {
+            const validationErrors = Object.values(error.errors).map(e => e.message);
+            return ResponseUtils.validationError(res, validationErrors);
+        }
+        
+        ResponseUtils.error(res, 'Gagal membuat user');
     }
 });
 
