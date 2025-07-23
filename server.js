@@ -110,23 +110,43 @@ const upload = multer({
 // ========================================
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/tradestation';
 
-mongoose.connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-    bufferMaxEntries: 0
-})
-.then(() => {
-    console.log('✅ Connected to MongoDB');
-    console.log('📍 Database:', MONGODB_URI.includes('localhost') ? 'Local' : 'Cloud');
-    initializeData();
-})
-.catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
-});
+// MongoDB connection with Railway-compatible options
+const connectDB = async () => {
+    try {
+        const conn = await mongoose.connect(MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            maxPoolSize: 10,
+            serverSelectionTimeoutMS: 10000,
+            socketTimeoutMS: 45000,
+            connectTimeoutMS: 10000,
+            heartbeatFrequencyMS: 10000,
+            retryWrites: true,
+            w: 'majority'
+        });
+
+        console.log('✅ Connected to MongoDB');
+        console.log('📍 Database Host:', conn.connection.host);
+        console.log('📍 Database Name:', conn.connection.name);
+        console.log('📍 Connection State:', conn.connection.readyState);
+        
+        // Initialize data after successful connection
+        await initializeData();
+        
+    } catch (err) {
+        console.error('❌ MongoDB connection error:', err);
+        console.error('❌ Connection String:', MONGODB_URI.replace(/:[^:@]*@/, ':****@'));
+        
+        // Retry connection after 5 seconds
+        setTimeout(() => {
+            console.log('🔄 Retrying MongoDB connection...');
+            connectDB();
+        }, 5000);
+    }
+};
+
+// Start database connection
+connectDB();
 
 // Handle MongoDB connection events
 mongoose.connection.on('error', (err) => {
@@ -134,11 +154,22 @@ mongoose.connection.on('error', (err) => {
 });
 
 mongoose.connection.on('disconnected', () => {
-    console.log('❌ MongoDB disconnected');
+    console.log('❌ MongoDB disconnected - attempting to reconnect...');
+    setTimeout(() => {
+        connectDB();
+    }, 1000);
 });
 
 mongoose.connection.on('reconnected', () => {
     console.log('✅ MongoDB reconnected');
+});
+
+mongoose.connection.on('connected', () => {
+    console.log('🔌 MongoDB connection established');
+});
+
+mongoose.connection.on('connecting', () => {
+    console.log('🔄 Connecting to MongoDB...');
 });
 
 // ========================================
@@ -510,172 +541,218 @@ io.on('connection', (socket) => {
 // ========================================
 const updateCryptoPrices = async () => {
     try {
+        // Check if database is connected
+        if (mongoose.connection.readyState !== 1) {
+            console.log('⏸️  Skipping price update - database not connected');
+            return;
+        }
+
         const symbols = ['BTC', 'ETH', 'LTC', 'XRP', 'DOGE', 'TRX'];
         
         for (const symbol of symbols) {
-            let price = await CryptoPrice.findOne({ symbol });
-            
-            if (!price) {
-                // Initialize with base prices
-                const basePrices = {
-                    BTC: 45000,
-                    ETH: 3200,
-                    LTC: 180,
-                    XRP: 0.65,
-                    DOGE: 0.08,
-                    TRX: 0.12
-                };
+            try {
+                let price = await CryptoPrice.findOne({ symbol });
                 
-                price = new CryptoPrice({
-                    symbol,
-                    price: basePrices[symbol],
-                    change: 0
-                });
-            }
+                if (!price) {
+                    // Initialize with base prices
+                    const basePrices = {
+                        BTC: 45000,
+                        ETH: 3200,
+                        LTC: 180,
+                        XRP: 0.65,
+                        DOGE: 0.08,
+                        TRX: 0.12
+                    };
+                    
+                    price = new CryptoPrice({
+                        symbol,
+                        price: basePrices[symbol],
+                        change: 0
+                    });
+                }
 
-            // Simulate realistic price movement
-            const volatility = {
-                BTC: 0.003,
-                ETH: 0.004,
-                LTC: 0.005,
-                XRP: 0.008,
-                DOGE: 0.015,
-                TRX: 0.010
-            }[symbol] || 0.005;
+                // Simulate realistic price movement
+                const volatility = {
+                    BTC: 0.003,
+                    ETH: 0.004,
+                    LTC: 0.005,
+                    XRP: 0.008,
+                    DOGE: 0.015,
+                    TRX: 0.010
+                }[symbol] || 0.005;
 
-            const randomChange = (Math.random() - 0.5) * volatility;
-            const trend = Math.sin(Date.now() / 100000) * 0.001; // Long-term trend
-            const oldPrice = price.price;
-            const newPrice = Math.max(0.001, oldPrice * (1 + randomChange + trend));
-            const changePercent = ((newPrice - oldPrice) / oldPrice) * 100;
+                const randomChange = (Math.random() - 0.5) * volatility;
+                const trend = Math.sin(Date.now() / 100000) * 0.001; // Long-term trend
+                const oldPrice = price.price;
+                const newPrice = Math.max(0.001, oldPrice * (1 + randomChange + trend));
+                const changePercent = ((newPrice - oldPrice) / oldPrice) * 100;
 
-            price.price = newPrice;
-            price.change = changePercent;
-            price.lastUpdated = new Date();
+                price.price = newPrice;
+                price.change = changePercent;
+                price.lastUpdated = new Date();
 
-            await price.save();
+                await price.save();
 
-            // Emit to connected clients (exclude paused sockets)
-            const room = io.sockets.adapter.rooms.get('price_updates');
-            if (room) {
-                room.forEach(socketId => {
-                    const socket = io.sockets.sockets.get(socketId);
-                    if (socket && !socket.paused) {
-                        socket.emit('priceUpdate', {
-                            symbol,
-                            price: newPrice,
-                            change: changePercent
-                        });
-                    }
-                });
+                // Emit to connected clients (exclude paused sockets)
+                const room = io.sockets.adapter.rooms.get('price_updates');
+                if (room) {
+                    room.forEach(socketId => {
+                        const socket = io.sockets.sockets.get(socketId);
+                        if (socket && !socket.paused) {
+                            socket.emit('priceUpdate', {
+                                symbol,
+                                price: newPrice,
+                                change: changePercent
+                            });
+                        }
+                    });
+                }
+            } catch (symbolError) {
+                console.error(`❌ Error updating ${symbol} price:`, symbolError.message);
             }
         }
     } catch (error) {
-        console.error('❌ Error updating crypto prices:', error);
+        console.error('❌ Error updating crypto prices:', error.message);
+        
+        // If it's a connection error, don't spam logs
+        if (!error.message.includes('buffering timed out') && !error.message.includes('connection')) {
+            console.error('Full error:', error);
+        }
     }
 };
 
-// Update prices every 3 seconds
-setInterval(updateCryptoPrices, 3000);
+// Note: Background processes are started after successful database initialization
 
 // ========================================
 // TRADE COMPLETION PROCESSOR
 // ========================================
 const processCompletedTrades = async () => {
     try {
+        // Check if database is connected
+        if (mongoose.connection.readyState !== 1) {
+            console.log('⏸️  Skipping trade processing - database not connected');
+            return;
+        }
+
         const now = new Date();
         const activeTrades = await Trade.find({
             status: 'active'
         }).populate('userId', 'name balance totalProfit totalLoss stats');
 
+        if (activeTrades.length === 0) {
+            return; // No active trades to process
+        }
+
         for (const trade of activeTrades) {
-            const timeElapsed = (now.getTime() - trade.createdAt.getTime()) / 1000;
-            
-            // Check if trade duration has passed
-            if (timeElapsed >= trade.duration) {
-                // Get current price
-                const currentPriceData = await CryptoPrice.findOne({ symbol: trade.symbol });
-                const currentPrice = currentPriceData ? currentPriceData.price : trade.entryPrice;
+            try {
+                const timeElapsed = (now.getTime() - trade.createdAt.getTime()) / 1000;
+                
+                // Check if trade duration has passed
+                if (timeElapsed >= trade.duration) {
+                    // Get current price
+                    const currentPriceData = await CryptoPrice.findOne({ symbol: trade.symbol });
+                    const currentPrice = currentPriceData ? currentPriceData.price : trade.entryPrice;
 
-                // Determine if trade direction is correct
-                const isDirectionCorrect = (trade.direction === 'buy' && currentPrice > trade.entryPrice) ||
-                                         (trade.direction === 'sell' && currentPrice < trade.entryPrice);
+                    // Determine if trade direction is correct
+                    const isDirectionCorrect = (trade.direction === 'buy' && currentPrice > trade.entryPrice) ||
+                                             (trade.direction === 'sell' && currentPrice < trade.entryPrice);
 
-                // Apply win rate (80% for demo)
-                const randomWin = Math.random() < 0.8;
-                const finalResult = isDirectionCorrect && randomWin ? 'win' : 'lose';
+                    // Apply win rate (80% for demo)
+                    const randomWin = Math.random() < 0.8;
+                    const finalResult = isDirectionCorrect && randomWin ? 'win' : 'lose';
 
-                // Calculate payout
-                let payout = 0;
-                if (finalResult === 'win') {
-                    payout = Math.floor(trade.amount * (1 + (trade.profitPercentage / 100)));
+                    // Calculate payout
+                    let payout = 0;
+                    if (finalResult === 'win') {
+                        payout = Math.floor(trade.amount * (1 + (trade.profitPercentage / 100)));
+                    }
+
+                    // Update trade
+                    trade.exitPrice = currentPrice;
+                    trade.result = finalResult;
+                    trade.payout = payout;
+                    trade.status = 'completed';
+                    trade.completedAt = now;
+                    await trade.save();
+
+                    // Update user balance and stats
+                    const user = trade.userId;
+                    if (!user) {
+                        console.error('❌ User not found for trade:', trade._id);
+                        continue;
+                    }
+
+                    const profit = payout - trade.amount;
+
+                    if (finalResult === 'win') {
+                        user.balance += payout;
+                        user.totalProfit += profit;
+                        user.stats.winTrades += 1;
+                    } else {
+                        user.totalLoss += trade.amount;
+                        user.stats.loseTrades += 1;
+                    }
+
+                    user.stats.totalTrades += 1;
+                    user.stats.winRate = user.stats.totalTrades > 0 ? 
+                        Math.round((user.stats.winTrades / user.stats.totalTrades) * 100) : 0;
+
+                    await user.save();
+
+                    // Check and update tax status
+                    await checkAndUpdateTaxStatus(user._id);
+
+                    // Emit to user
+                    const socketId = connectedUsers.get(user._id.toString());
+                    if (socketId) {
+                        io.to(`user_${user._id}`).emit('tradeCompleted', {
+                            trade: {
+                                _id: trade._id,
+                                symbol: trade.symbol,
+                                direction: trade.direction,
+                                amount: trade.amount,
+                                result: finalResult,
+                                payout: payout,
+                                exitPrice: currentPrice
+                            },
+                            newBalance: user.balance
+                        });
+                    }
+
+                    console.log(`✅ Trade completed: ${trade.symbol} ${trade.direction} - ${finalResult} - User: ${user.name} - ${formatCurrency(finalResult === 'win' ? profit : -trade.amount)}`);
                 }
-
-                // Update trade
-                trade.exitPrice = currentPrice;
-                trade.result = finalResult;
-                trade.payout = payout;
-                trade.status = 'completed';
-                trade.completedAt = now;
-                await trade.save();
-
-                // Update user balance and stats
-                const user = trade.userId;
-                const profit = payout - trade.amount;
-
-                if (finalResult === 'win') {
-                    user.balance += payout;
-                    user.totalProfit += profit;
-                    user.stats.winTrades += 1;
-                } else {
-                    user.totalLoss += trade.amount;
-                    user.stats.loseTrades += 1;
-                }
-
-                user.stats.totalTrades += 1;
-                user.stats.winRate = user.stats.totalTrades > 0 ? 
-                    Math.round((user.stats.winTrades / user.stats.totalTrades) * 100) : 0;
-
-                await user.save();
-
-                // Check and update tax status
-                await checkAndUpdateTaxStatus(user._id);
-
-                // Emit to user
-                const socketId = connectedUsers.get(user._id.toString());
-                if (socketId) {
-                    io.to(`user_${user._id}`).emit('tradeCompleted', {
-                        trade: {
-                            _id: trade._id,
-                            symbol: trade.symbol,
-                            direction: trade.direction,
-                            amount: trade.amount,
-                            result: finalResult,
-                            payout: payout,
-                            exitPrice: currentPrice
-                        },
-                        newBalance: user.balance
-                    });
-                }
-
-                console.log(`✅ Trade completed: ${trade.symbol} ${trade.direction} - ${finalResult} - User: ${user.name} - ${formatCurrency(finalResult === 'win' ? profit : -trade.amount)}`);
+            } catch (tradeError) {
+                console.error(`❌ Error processing trade ${trade._id}:`, tradeError.message);
             }
         }
     } catch (error) {
-        console.error('❌ Error processing completed trades:', error);
+        console.error('❌ Error processing completed trades:', error.message);
+        
+        // If it's a connection error, don't spam logs
+        if (!error.message.includes('buffering timed out') && !error.message.includes('connection')) {
+            console.error('Full error:', error);
+        }
     }
 };
 
-// Process trades every 5 seconds
-setInterval(processCompletedTrades, 5000);
+// Note: Trade processing is started after successful database initialization
 
 // ========================================
 // TAX MANAGEMENT FUNCTIONS
 // ========================================
 const checkAndUpdateTaxStatus = async (userId) => {
     try {
+        // Check if database is connected
+        if (mongoose.connection.readyState !== 1) {
+            console.log('⏸️  Skipping tax check - database not connected');
+            return;
+        }
+
         const user = await User.findById(userId);
-        if (!user) return;
+        if (!user) {
+            console.log('⚠️  User not found for tax check:', userId);
+            return;
+        }
 
         const TAX_THRESHOLD = 50000000; // 50 million IDR
         const TAX_PERCENTAGE = 10; // 10%
@@ -707,7 +784,12 @@ const checkAndUpdateTaxStatus = async (userId) => {
             }
         }
     } catch (error) {
-        console.error('❌ Error checking tax status:', error);
+        console.error('❌ Error checking tax status:', error.message);
+        
+        // Don't spam logs for connection errors
+        if (!error.message.includes('buffering timed out') && !error.message.includes('connection')) {
+            console.error('Full tax error:', error);
+        }
     }
 };
 
@@ -716,15 +798,53 @@ const checkAndUpdateTaxStatus = async (userId) => {
 // ========================================
 
 // Health check
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'OK', 
-        timestamp: new Date().toISOString(),
-        version: '2.0.0',
-        env: process.env.NODE_ENV || 'development',
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        connectedUsers: connectedUsers.size
-    });
+app.get('/api/health', async (req, res) => {
+    try {
+        const dbState = mongoose.connection.readyState;
+        const dbStatus = {
+            0: 'disconnected',
+            1: 'connected', 
+            2: 'connecting',
+            3: 'disconnecting'
+        }[dbState] || 'unknown';
+
+        // Test database connection
+        let dbTest = false;
+        try {
+            await mongoose.connection.db.admin().ping();
+            dbTest = true;
+        } catch (err) {
+            console.log('Database ping failed:', err.message);
+        }
+
+        const health = {
+            status: dbState === 1 ? 'OK' : 'ERROR',
+            timestamp: new Date().toISOString(),
+            version: '2.0.0',
+            env: process.env.NODE_ENV || 'development',
+            database: {
+                status: dbStatus,
+                connected: dbState === 1,
+                ping: dbTest,
+                host: mongoose.connection.host || 'unknown',
+                name: mongoose.connection.name || 'unknown'
+            },
+            server: {
+                uptime: process.uptime(),
+                memory: process.memoryUsage(),
+                connectedUsers: connectedUsers.size
+            }
+        };
+
+        res.status(dbState === 1 ? 200 : 503).json(health);
+    } catch (error) {
+        console.error('Health check error:', error);
+        res.status(500).json({
+            status: 'ERROR',
+            timestamp: new Date().toISOString(),
+            error: error.message
+        });
+    }
 });
 
 // ========================================
@@ -1698,6 +1818,14 @@ app.use('/api/*', (req, res) => {
 // ========================================
 const initializeData = async () => {
     try {
+        // Wait for connection to be ready
+        if (mongoose.connection.readyState !== 1) {
+            console.log('⏳ Waiting for MongoDB connection...');
+            await new Promise((resolve) => {
+                mongoose.connection.once('connected', resolve);
+            });
+        }
+
         console.log('🔄 Initializing database data...');
 
         // Create admin user if not exists
@@ -1715,11 +1843,13 @@ const initializeData = async () => {
             });
             await admin.save();
             console.log('✅ Admin user created: admin@traderstasion.com / admin123456');
+        } else {
+            console.log('ℹ️  Admin user already exists');
         }
 
         // Initialize crypto prices
-        const cryptoExists = await CryptoPrice.findOne();
-        if (!cryptoExists) {
+        const cryptoCount = await CryptoPrice.countDocuments();
+        if (cryptoCount === 0) {
             const initialPrices = [
                 { symbol: 'BTC', price: 45230.50, change: 2.45 },
                 { symbol: 'ETH', price: 3187.25, change: -1.23 },
@@ -1731,11 +1861,13 @@ const initializeData = async () => {
 
             await CryptoPrice.insertMany(initialPrices);
             console.log('✅ Initial crypto prices loaded');
+        } else {
+            console.log('ℹ️  Crypto prices already initialized');
         }
 
         // Initialize sample bank accounts
-        const bankExists = await BankAccount.findOne();
-        if (!bankExists) {
+        const bankCount = await BankAccount.countDocuments();
+        if (bankCount === 0) {
             const bankAccounts = [
                 {
                     bankName: 'Bank BCA',
@@ -1762,12 +1894,35 @@ const initializeData = async () => {
 
             await BankAccount.insertMany(bankAccounts);
             console.log('✅ Sample bank accounts created');
+        } else {
+            console.log('ℹ️  Bank accounts already initialized');
         }
 
-        console.log('✅ Database initialization completed');
+        console.log('✅ Database initialization completed successfully');
+        
+        // Start background processes after successful initialization
+        startBackgroundProcesses();
+        
     } catch (error) {
         console.error('❌ Database initialization error:', error);
+        console.log('🔄 Retrying initialization in 10 seconds...');
+        setTimeout(() => {
+            initializeData();
+        }, 10000);
     }
+};
+
+// Start background processes
+const startBackgroundProcesses = () => {
+    console.log('🔄 Starting background processes...');
+    
+    // Start price updates
+    setInterval(updateCryptoPrices, 3000);
+    console.log('✅ Price update process started (every 3 seconds)');
+    
+    // Start trade processing  
+    setInterval(processCompletedTrades, 5000);
+    console.log('✅ Trade processing started (every 5 seconds)');
 };
 
 // ========================================
@@ -1775,21 +1930,27 @@ const initializeData = async () => {
 // ========================================
 const PORT = process.env.PORT || 5000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-jwt-secret-key-change-in-production';
+
+// Warn if using fallback JWT secret
+if (!process.env.JWT_SECRET) {
+    console.log('⚠️  WARNING: Using fallback JWT secret. Set JWT_SECRET environment variable for production.');
+}
 
 server.listen(PORT, () => {
     console.log(`
-🚀 TradeStation Server Running!
+🚀 TradeStation Server Starting!
 📍 Port: ${PORT}
 🌍 Environment: ${NODE_ENV}
 💾 Database: ${MONGODB_URI.includes('localhost') ? 'Local MongoDB' : 'Cloud MongoDB'}
 ⚡ Socket.IO: Enabled with CORS
-🔐 JWT Secret: ${process.env.JWT_SECRET ? 'Configured' : 'Using fallback'}
-📊 Real-time Updates: Active
-🔄 Auto Price Updates: Every 3 seconds
-⏱️  Trade Processing: Every 5 seconds
+🔐 JWT Secret: ${process.env.JWT_SECRET ? 'Configured' : 'Using fallback (set JWT_SECRET)'}
 🛡️  Security: Helmet + CORS + Rate Limiting
 📱 Static Files: Serving from /public
+🔄 Background Processes: Will start after DB connection
     `);
+    
+    console.log('⏳ Waiting for database connection to complete initialization...');
 });
 
 // ========================================
