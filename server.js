@@ -57,6 +57,7 @@ app.use(cors({
         "https://traderstasion.com", 
         "https://www.traderstasion.com/",
         "https://traderstasion.com/",
+        "https://tstradestation-backend-production.up.railway.app",
         "http://localhost:3000", 
         "http://127.0.0.1:5500", 
         "http://localhost:5500",
@@ -4745,7 +4746,7 @@ app.post('/api/admin/qris/upload', authenticateToken, requireAdmin, async (req, 
 
         // Here you would typically save to file system or cloud storage
         // For this example, we'll simulate successful upload
-        const qrisUrl = '/uploads/qris.png'; // This would be the actual file URL
+        const qrisUrl = '/uploads/qris.jpg'; // This would be the actual file URL
 
         await logActivity(
             req.userId, 
