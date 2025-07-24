@@ -8,12 +8,74 @@ const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
-const {
-    ValidationUtils,
-    ResponseUtils,
-    UserUtils,
-    ActivityLogger
-} = require('./server-utils');
+
+// Import server-utils dengan penanganan error
+let ValidationUtils, ResponseUtils, UserUtils, ActivityLogger;
+try {
+    const utils = require('./server-utils');
+    ValidationUtils = utils.ValidationUtils;
+    ResponseUtils = utils.ResponseUtils;
+    UserUtils = utils.UserUtils;
+    ActivityLogger = utils.ActivityLogger;
+    console.log('✅ server-utils.js loaded successfully');
+} catch (error) {
+    console.error('❌ server-utils.js not found, using fallback functions');
+    
+    // Fallback functions jika server-utils.js tidak ada
+    ValidationUtils = {
+        email: { 
+            isValid: (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 
+            normalize: (email) => email?.toLowerCase().trim() 
+        },
+        phone: { 
+            isValid: (phone) => /^(\+?628\d{8,11}|08\d{8,11})$/.test(phone?.replace(/[\s\-\(\)\+]/g, '')), 
+            normalize: (phone) => phone?.replace(/[\s\-\(\)\+]/g, '').replace(/^08/, '628') 
+        },
+        password: { isValid: (password) => password && password.length >= 6 },
+        name: { 
+            isValid: (name) => name && name.trim().length >= 2, 
+            normalize: (name) => name?.trim() 
+        }
+    };
+    ResponseUtils = {
+        success: (res, data, message = 'Success', statusCode = 200) => res.status(statusCode).json({ success: true, message, data }),
+        error: (res, message, statusCode = 500) => res.status(statusCode).json({ success: false, error: message }),
+        validationError: (res, errors) => res.status(400).json({ success: false, error: 'Validation failed', details: errors })
+    };
+    UserUtils = {
+        findByIdentifier: async (identifier, User) => {
+            return await User.findOne({
+                $or: [
+                    { email: identifier.toLowerCase() },
+                    { phone: identifier.replace(/[\s\-\(\)\+]/g, '') }
+                ]
+            }).lean();
+        },
+        generateUniqueReferralCode: async (User) => {
+            let code;
+            do {
+                code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            } while (await User.findOne({ referralCode: code }));
+            return code;
+        },
+        validateUniqueIdentifier: async (email, phone, User) => {
+            const errors = [];
+            if (email && await User.findOne({ email })) errors.push('Email sudah terdaftar');
+            if (phone && await User.findOne({ phone })) errors.push('Nomor HP sudah terdaftar');
+            return errors;
+        }
+    };
+    ActivityLogger = {
+        log: async (userId, action, details, req, Activity) => {
+            try {
+                await Activity.create({
+                    userId, action, details,
+                    ip: req?.ip, userAgent: req?.get('User-Agent')
+                });
+            } catch (err) { console.error('Activity log error:', err); }
+        }
+    };
+}
 
 const app = express();
 
@@ -57,6 +119,7 @@ app.use(cors({
         "https://traderstasion.com", 
         "https://www.traderstasion.com/",
         "https://traderstasion.com/",
+        "https://traderstasion.netlify.app",
         "https://tstradestation-backend-production.up.railway.app",
         "http://localhost:3000", 
         "http://127.0.0.1:5500", 
@@ -73,38 +136,41 @@ app.use(cors({
         'Accept',
         'Origin',
         'Access-Control-Request-Method',
-        'Access-Control-Request-Headers'
+        'Access-Control-Request-Headers',
+        'Cache-Control',
+        'Pragma'
     ],
-    exposedHeaders: ['Content-Length', 'X-Requested-With'],
+    exposedHeaders: ['Content-Length', 'X-Requested-With', 'Authorization'],
     optionsSuccessStatus: 200,
     preflightContinue: false
 }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-
-// ✅ TAMBAHKAN MIDDLEWARE CORS MANUAL UNTUK HANDLE PREFLIGHT
+// ✅ TAMBAHAN CORS MANUAL HANDLING
 app.use((req, res, next) => {
     const allowedOrigins = [
         "https://www.traderstasion.com",
-        "https://traderstasion.com", 
-        "https://www.traderstasion.com/",
-        "https://traderstasion.com/",
-        "http://localhost:3000", 
-        "http://127.0.0.1:5500", 
+        "https://traderstasion.com",
+        "https://traderstasion.netlify.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:5500",
         "http://localhost:5500"
     ];
     
     const origin = req.headers.origin;
+    
+    // ✅ ALWAYS SET CORS HEADERS
     if (allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
+    } else {
+        res.setHeader('Access-Control-Allow-Origin', '*'); // Fallback untuk testing
     }
     
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Requested-With, Authorization');
     
-    // Handle preflight requests
+    // ✅ HANDLE PREFLIGHT REQUESTS
     if (req.method === 'OPTIONS') {
         res.status(200).end();
         return;
@@ -112,6 +178,38 @@ app.use((req, res, next) => {
     
     next();
 });
+
+// ✅ STATIC FILES SERVING
+app.use(express.static('public', {
+    maxAge: '1d',
+    etag: false
+}));
+
+// ✅ SPECIFIC ROUTE FOR QRIS IMAGE
+app.get('/qris.png', (req, res) => {
+    res.sendFile(__dirname + '/public/qris.png', (err) => {
+        if (err) {
+            console.log('❌ QRIS image not found, sending placeholder');
+            res.status(404).json({ 
+                error: 'QRIS image not found',
+                message: 'Please upload qris.png to public folder'
+            });
+        }
+    });
+});
+
+app.get('/qris.jpg', (req, res) => {
+    res.sendFile(__dirname + '/public/qris.jpg', (err) => {
+        if (err) {
+            console.log('❌ QRIS image not found, sending placeholder');
+            res.status(404).json({ 
+                error: 'QRIS image not found',
+                message: 'Please upload qris.jpg to public folder'
+            });
+        }
+    });
+});
+
 
 // Rate limiting
 const limiter = rateLimit({
@@ -975,8 +1073,11 @@ function cleanupIntervals() {
 
 const checkDatabaseConnection = (req, res, next) => {
     if (mongoose.connection.readyState !== 1) {
+        console.error('❌ Database not connected, state:', mongoose.connection.readyState);
         return res.status(503).json({ 
+            success: false,
             error: 'Database temporarily unavailable',
+            code: 'DATABASE_UNAVAILABLE',
             message: 'Please try again in a few moments'
         });
     }
@@ -990,32 +1091,88 @@ const authenticateToken = async (req, res, next) => {
         const token = authHeader && authHeader.split(' ')[1];
 
         if (!token) {
-            return res.status(401).json({ error: 'Access token required' });
+            console.log('❌ No token provided for route:', req.path);
+            return res.status(401).json({ 
+                success: false,
+                error: 'Access token required',
+                code: 'NO_TOKEN'
+            });
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        console.log('🔐 Verifying token for route:', req.path);
         
-        // ✅ ENHANCED USER LOOKUP WITH PROPER ERROR HANDLING
-        const user = await User.findById(decoded.userId).lean();
+        // ✅ BETTER ERROR HANDLING FOR JWT
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
+        } catch (jwtError) {
+            console.log('❌ JWT verification failed:', jwtError.message);
+            
+            if (jwtError.name === 'TokenExpiredError') {
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Token expired',
+                    code: 'TOKEN_EXPIRED'
+                });
+            } else if (jwtError.name === 'JsonWebTokenError') {
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Invalid token',
+                    code: 'INVALID_TOKEN'
+                });
+            } else {
+                throw jwtError;
+            }
+        }
+        
+        // ✅ ENHANCED USER LOOKUP WITH BETTER ERROR HANDLING
+        let user;
+        try {
+            user = await User.findById(decoded.userId)
+                .select('-password')
+                .maxTimeMS(10000);
+        } catch (dbError) {
+            console.error('❌ Database error in auth middleware:', dbError);
+            return res.status(503).json({ 
+                success: false,
+                error: 'Database connection error',
+                code: 'DATABASE_ERROR'
+            });
+        }
         
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            console.log('❌ User not found for token:', decoded.userId);
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
+            });
         }
         
         if (!user.isActive) {
-            return res.status(403).json({ error: 'Account is deactivated' });
+            console.log('❌ User account deactivated:', user.email || user.phone);
+            return res.status(403).json({ 
+                success: false,
+                error: 'Account is deactivated',
+                code: 'ACCOUNT_DEACTIVATED'
+            });
         }
         
         req.userId = decoded.userId;
         req.user = user;
+        
+        console.log(`✅ Authentication successful for user: ${user.name} (${user.email || user.phone})`);
         next();
+        
     } catch (error) {
-        if (error.name === 'TokenExpiredError') {
-            return res.status(403).json({ error: 'Token expired' });
-        } else if (error.name === 'JsonWebTokenError') {
-            return res.status(403).json({ error: 'Invalid token' });
-        }
-        return res.status(403).json({ error: 'Token verification failed' });
+        console.error('❌ Authentication error:', error);
+        
+        return res.status(500).json({ 
+            success: false,
+            error: 'Authentication failed',
+            code: 'AUTH_ERROR',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
     }
 };
 
@@ -2684,64 +2841,237 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { email, phone, password } = req.body;
-        const identifier = email || phone;
+        console.log('📝 Login request received:', {
+            body: req.body,
+            hasIdentifier: !!(req.body.identifier || req.body.email),
+            hasPassword: !!req.body.password,
+            timestamp: new Date().toISOString()
+        });
+
+        // ✅ SUPPORT BOTH OLD AND NEW FORMAT
+        const identifier = req.body.identifier || req.body.email;
+        const password = req.body.password;
         
-        console.log('📝 Login attempt:', { 
-            email: email || 'none', 
-            phone: phone || 'none',
-            hasPassword: !!password
+        if (!identifier || !password) {
+            console.log('❌ Missing credentials');
+            return res.status(400).json({
+                success: false,
+                error: 'Email/HP dan password diperlukan',
+                code: 'MISSING_CREDENTIALS'
+            });
+        }
+
+        console.log('🔍 Looking for user with identifier:', identifier);
+
+        // ✅ SIMPLIFIED USER SEARCH
+        let user = null;
+        
+        try {
+            // ✅ SINGLE QUERY WITH OR CONDITIONS
+            const searchQueries = [];
+            
+            // Search by email if identifier contains @
+            if (identifier.includes('@')) {
+                searchQueries.push({ email: identifier.toLowerCase().trim() });
+            }
+            
+            // Search by phone - normalize identifier
+            const normalizedPhone = identifier.replace(/[\s\-\(\)\+]/g, '');
+            const phoneVariations = [];
+            
+            if (normalizedPhone.startsWith('08')) {
+                phoneVariations.push('628' + normalizedPhone.substring(2));
+            } else if (normalizedPhone.startsWith('8') && normalizedPhone.length >= 10) {
+                phoneVariations.push('62' + normalizedPhone);
+            } else if (normalizedPhone.startsWith('62')) {
+                phoneVariations.push(normalizedPhone);
+            }
+            phoneVariations.push(normalizedPhone); // Add original
+            
+            // Add phone variations to search
+            phoneVariations.forEach(phone => {
+                searchQueries.push({ phone: phone });
+            });
+            
+            console.log('🔍 Search queries:', searchQueries);
+            
+            // Execute search
+            if (searchQueries.length > 0) {
+                user = await User.findOne({ $or: searchQueries }).maxTimeMS(10000);
+            }
+            
+        } catch (dbError) {
+            console.error('❌ Database error during user search:', dbError);
+            throw new Error('DATABASE_CONNECTION_ERROR');
+        }
+        
+        if (!user) {
+            console.log('❌ User not found for identifier:', identifier);
+            return res.status(401).json({
+                success: false,
+                error: 'Email/HP atau password salah',
+                code: 'INVALID_CREDENTIALS'
+            });
+        }
+        
+        console.log('✅ User found:', {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            isActive: user.isActive
         });
         
-        // ✅ BASIC VALIDATION
-        if (!identifier || !password) {
-            return ResponseUtils.validationError(res, 'Email/HP dan password diperlukan');
+        if (!user.isActive) {
+            console.log('❌ User account deactivated');
+            return res.status(403).json({
+                success: false,
+                error: 'Akun Anda telah dinonaktifkan',
+                code: 'ACCOUNT_DEACTIVATED'
+            });
         }
 
-        // ✅ FIND USER BY IDENTIFIER
-        const user = await UserUtils.findByIdentifier(identifier, User);
+        // ✅ VALIDATE PASSWORD
+        console.log('🔐 Validating password...');
+        let isValidPassword = false;
         
-        if (!user || !user.isActive) {
-            return ResponseUtils.error(res, 'Email/HP atau password salah', 401);
+        try {
+            isValidPassword = await bcrypt.compare(password, user.password);
+        } catch (bcryptError) {
+            console.error('❌ Password validation error:', bcryptError);
+            throw new Error('PASSWORD_VALIDATION_ERROR');
         }
-
-        // ✅ PASSWORD VALIDATION
-        const isValidPassword = await bcrypt.compare(password, user.password);
+        
         if (!isValidPassword) {
-            return ResponseUtils.error(res, 'Email/HP atau password salah', 401);
+            console.log('❌ Invalid password');
+            return res.status(401).json({
+                success: false,
+                error: 'Email/HP atau password salah',
+                code: 'INVALID_CREDENTIALS'
+            });
         }
+        
+        console.log('✅ Password valid');
 
-        // Update last login
-        await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
-
-        // ✅ LOG ACTIVITY
-        await ActivityLogger.log(
-            user._id, 
-            'USER_LOGIN',
-            `User logged in: ${identifier}`,
-            req,
-            Activity
-        );
+        // ✅ UPDATE LAST LOGIN (OPTIONAL - DON'T FAIL IF ERROR)
+        try {
+            await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
+            console.log('✅ Last login updated');
+        } catch (updateError) {
+            console.error('⚠️ Failed to update last login (non-critical):', updateError);
+        }
 
         // ✅ GENERATE TOKEN
-        const token = jwt.sign(
-            { userId: user._id },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
+        let token;
+        try {
+            token = jwt.sign(
+                { userId: user._id },
+                process.env.JWT_SECRET,
+                { expiresIn: '7d' }
+            );
+            console.log('✅ Token generated');
+        } catch (tokenError) {
+            console.error('❌ Token generation error:', tokenError);
+            throw new Error('TOKEN_GENERATION_ERROR');
+        }
+
+        // ✅ PREPARE SAFE USER RESPONSE
+        const userResponse = {
+            _id: user._id,
+            name: user.name || 'Unknown User',
+            email: user.email || null,
+            phone: user.phone || null,
+            balance: user.balance || 0,
+            accountType: user.accountType || 'standard',
+            isActive: user.isActive !== false,
+            totalProfit: user.totalProfit || 0,
+            totalLoss: user.totalLoss || 0,
+            adminSettings: user.adminSettings || {
+                profitCollapse: 'normal',
+                profitPercentage: 80,
+                forceWin: false,
+                forceWinRate: 0
+            },
+            stats: user.stats || {
+                totalTrades: 0,
+                winTrades: 0,
+                loseTrades: 0
+            },
+            bankData: user.bankData || {
+                bankName: '',
+                accountNumber: '',
+                accountHolder: ''
+            },
+            referralCode: user.referralCode || '',
+            createdAt: user.createdAt
+        };
+
+        // ✅ LOG ACTIVITY (OPTIONAL - DON'T FAIL IF ERROR)
+        try {
+            await Activity.create({
+                userId: user._id,
+                action: 'USER_LOGIN',
+                details: `User logged in: ${identifier}`,
+                ip: req.ip,
+                userAgent: req.get('User-Agent'),
+                createdAt: new Date()
+            });
+            console.log('✅ Activity logged');
+        } catch (logError) {
+            console.error('⚠️ Failed to log activity (non-critical):', logError);
+        }
 
         // ✅ SUCCESS RESPONSE
-        const userResponse = { ...user };
-        delete userResponse.password;
-
-        ResponseUtils.success(res, {
+        const response = {
+            success: true,
+            message: 'Login berhasil',
             token,
-            user: userResponse
-        }, 'Login berhasil');
+            user: userResponse,
+            timestamp: new Date().toISOString()
+        };
+        
+        console.log('✅ Login successful for user:', user.name);
+        res.status(200).json(response);
         
     } catch (error) {
         console.error('❌ Login error:', error);
-        ResponseUtils.error(res, 'Login gagal. Silakan coba lagi.');
+        console.error('Error stack:', error.stack);
+        
+        // ✅ SPECIFIC ERROR HANDLING
+        let statusCode = 500;
+        let errorMessage = 'Server error. Silakan coba lagi.';
+        let errorCode = 'SERVER_ERROR';
+        
+        if (error.message === 'DATABASE_CONNECTION_ERROR') {
+            statusCode = 503;
+            errorMessage = 'Database connection error';
+            errorCode = 'DATABASE_ERROR';
+        } else if (error.message === 'PASSWORD_VALIDATION_ERROR') {
+            statusCode = 500;
+            errorMessage = 'Password validation failed';
+            errorCode = 'PASSWORD_ERROR';
+        } else if (error.message === 'TOKEN_GENERATION_ERROR') {
+            statusCode = 500;
+            errorMessage = 'Token generation failed';
+            errorCode = 'TOKEN_ERROR';
+        } else if (error.name === 'MongoTimeoutError') {
+            statusCode = 503;
+            errorMessage = 'Database timeout';
+            errorCode = 'DATABASE_TIMEOUT';
+        }
+        
+        res.status(statusCode).json({
+            success: false,
+            error: errorMessage,
+            code: errorCode,
+            timestamp: new Date().toISOString(),
+            ...(process.env.NODE_ENV === 'development' && {
+                debug: {
+                    message: error.message,
+                    stack: error.stack
+                }
+            })
+        });
     }
 });
 
@@ -2789,12 +3119,108 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
 // Bank Data Routes
 app.get('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
-        const user = await User.findById(req.userId).select('bankData');
-        res.json(user.bankData || {});
+        console.log(`🔍 Loading bank data for user ${req.userId}`);
+        
+        const user = await User.findById(req.userId)
+            .select('bankData name email phone')
+            .maxTimeMS(15000);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
+        
+        const bankData = user.bankData || {
+            bankName: '',
+            accountNumber: '',
+            accountHolder: ''
+        };
+        
+        res.json({
+            success: true,
+            bankData: bankData,
+            userInfo: {
+                name: user.name,
+                email: user.email,
+                phone: user.phone
+            }
+        });
+        
+        console.log(`✅ Bank data loaded for user: ${user.name}`);
+        
     } catch (error) {
-        res.status(500).json({ error: 'Failed to load bank data' });
+        console.error('❌ User bank data error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load bank data',
+            message: error.message
+        });
     }
 });
+
+// ✅ TRADING HISTORY SUMMARY ENDPOINT
+app.get('/api/trading/history', authenticateToken, async (req, res) => {
+    try {
+        console.log(`🔍 Loading trading history for user ${req.userId}`);
+        
+        const [recentTrades, tradeStats] = await Promise.all([
+            Trade.find({ userId: req.userId })
+                .sort({ createdAt: -1 })
+                .limit(20)
+                .maxTimeMS(15000),
+            Trade.aggregate([
+                { $match: { userId: req.userId } },
+                { $group: {
+                    _id: null,
+                    totalTrades: { $sum: 1 },
+                    winTrades: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, 1, 0] } },
+                    loseTrades: { $sum: { $cond: [{ $eq: ['$result', 'lose'] }, 1, 0] } },
+                    totalVolume: { $sum: '$amount' },
+                    totalPayout: { $sum: { $ifNull: ['$payout', 0] } }
+                }}
+            ]).maxTimeMS(15000)
+        ]);
+        
+        const stats = tradeStats[0] || {
+            totalTrades: 0,
+            winTrades: 0,
+            loseTrades: 0,
+            totalVolume: 0,
+            totalPayout: 0
+        };
+        
+        const safeRecentTrades = recentTrades.map(trade => ({
+            _id: trade._id,
+            symbol: trade.symbol,
+            direction: trade.direction,
+            amount: trade.amount,
+            result: trade.result,
+            payout: trade.payout || 0,
+            createdAt: trade.createdAt
+        }));
+        
+        res.json({
+            success: true,
+            recentTrades: safeRecentTrades,
+            stats: {
+                ...stats,
+                winRate: stats.totalTrades > 0 ? (stats.winTrades / stats.totalTrades * 100).toFixed(2) : 0
+            }
+        });
+        
+        console.log(`✅ Trading history loaded: ${safeRecentTrades.length} recent trades`);
+        
+    } catch (error) {
+        console.error('❌ Trading history error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load trading history'
+        });
+    }
+});
+
 
 app.put('/api/profile/bank', authenticateToken, async (req, res) => {
     try {
@@ -2943,22 +3369,105 @@ app.post('/api/trade', authenticateToken, async (req, res) => {
 
 app.get('/api/trades', authenticateToken, async (req, res) => {
     try {
-        const { limit = 50, status } = req.query;
+        const { limit = 50, status, page = 1 } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(5, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
         
         let query = { userId: req.userId };
         if (status && ['active', 'completed', 'cancelled'].includes(status)) {
             query.status = status;
         }
         
+        console.log(`🔍 Loading trades for user ${req.userId}:`, query);
+        
+        // ✅ SIMPLIFIED QUERY - HAPUS LEAN() YANG BERMASALAH
         const trades = await Trade.find(query)
             .sort({ createdAt: -1 })
-            .limit(Math.min(parseInt(limit), 100))
-            .select('-__v');
+            .skip(skip)
+            .limit(limitNum)
+            .maxTimeMS(30000); // Timeout lebih lama
         
-        res.json({ trades });
+        const totalTrades = await Trade.countDocuments(query);
+        
+        // ✅ SAFE RESPONSE FORMAT
+        const safeTrades = trades.map(trade => ({
+            _id: trade._id,
+            symbol: trade.symbol || 'UNKNOWN',
+            direction: trade.direction || 'buy',
+            amount: trade.amount || 0,
+            duration: trade.duration || 30,
+            entryPrice: trade.entryPrice || 0,
+            exitPrice: trade.exitPrice || null,
+            status: trade.status || 'active',
+            result: trade.result || null,
+            payout: trade.payout || 0,
+            profitPercentage: trade.profitPercentage || 80,
+            createdAt: trade.createdAt,
+            completedAt: trade.completedAt || null
+        }));
+        
+        res.json({
+            success: true,
+            trades: safeTrades,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalTrades,
+                pages: Math.ceil(totalTrades / limitNum)
+            }
+        });
+        
+        console.log(`✅ Trades loaded successfully: ${safeTrades.length} trades`);
+        
     } catch (error) {
-        console.error('❌ Trades error:', error);
-        res.status(500).json({ error: 'Failed to load trades' });
+        console.error('❌ User trades error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load trades',
+            message: error.message
+        });
+    }
+});
+
+// ✅ ACTIVE TRADES ENDPOINT - KHUSUS UNTUK ACTIVE TRADES
+app.get('/api/trades/active', authenticateToken, async (req, res) => {
+    try {
+        console.log(`🔍 Loading active trades for user ${req.userId}`);
+        
+        const activeTrades = await Trade.find({ 
+            userId: req.userId, 
+            status: 'active' 
+        })
+        .sort({ createdAt: -1 })
+        .maxTimeMS(15000);
+        
+        const safeActiveTrades = activeTrades.map(trade => ({
+            _id: trade._id,
+            symbol: trade.symbol,
+            direction: trade.direction,
+            amount: trade.amount,
+            duration: trade.duration,
+            entryPrice: trade.entryPrice,
+            status: trade.status,
+            createdAt: trade.createdAt,
+            profitPercentage: trade.profitPercentage || 80
+        }));
+        
+        res.json({
+            success: true,
+            activeTrades: safeActiveTrades,
+            count: safeActiveTrades.length
+        });
+        
+        console.log(`✅ Active trades loaded: ${safeActiveTrades.length} trades`);
+        
+    } catch (error) {
+        console.error('❌ Active trades error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load active trades'
+        });
     }
 });
 
@@ -3033,15 +3542,56 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
 
 app.get('/api/deposits', authenticateToken, async (req, res) => {
     try {
+        const { limit = 50, page = 1 } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(5, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+        
+        console.log(`🔍 Loading deposits for user ${req.userId}`);
+        
+        // ✅ SIMPLIFIED QUERY - HAPUS LEAN()
         const deposits = await Deposit.find({ userId: req.userId })
             .sort({ createdAt: -1 })
-            .select('-receipt')
-            .limit(50);
+            .skip(skip)
+            .limit(limitNum)
+            .maxTimeMS(30000);
         
-        res.json(deposits);
+        const totalDeposits = await Deposit.countDocuments({ userId: req.userId });
+        
+        // ✅ SAFE RESPONSE FORMAT
+        const safeDeposits = deposits.map(deposit => ({
+            _id: deposit._id,
+            amount: deposit.amount || 0,
+            method: deposit.method || 'bank',
+            bankFrom: deposit.bankFrom || 'Not specified',
+            status: deposit.status || 'pending',
+            adminNotes: deposit.adminNotes || '',
+            fileName: deposit.fileName || 'payment_proof',
+            transferTime: deposit.transferTime,
+            createdAt: deposit.createdAt,
+            processedAt: deposit.processedAt
+        }));
+        
+        res.json({
+            success: true,
+            deposits: safeDeposits,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalDeposits,
+                pages: Math.ceil(totalDeposits / limitNum)
+            }
+        });
+        
+        console.log(`✅ Deposits loaded successfully: ${safeDeposits.length} deposits`);
+        
     } catch (error) {
-        console.error('❌ Deposits error:', error);
-        res.status(500).json({ error: 'Failed to load deposits' });
+        console.error('❌ User deposits error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load deposits',
+            message: error.message
+        });
     }
 });
 
@@ -3147,14 +3697,59 @@ app.post('/api/withdrawal', authenticateToken, async (req, res) => {
 
 app.get('/api/withdrawals', authenticateToken, async (req, res) => {
     try {
+        const { limit = 50, page = 1 } = req.query;
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(5, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+        
+        console.log(`🔍 Loading withdrawals for user ${req.userId}`);
+        
+        // ✅ SIMPLIFIED QUERY - HAPUS LEAN()
         const withdrawals = await Withdrawal.find({ userId: req.userId })
             .sort({ createdAt: -1 })
-            .limit(50);
+            .skip(skip)
+            .limit(limitNum)
+            .maxTimeMS(30000);
         
-        res.json(withdrawals);
+        const totalWithdrawals = await Withdrawal.countDocuments({ userId: req.userId });
+        
+        // ✅ SAFE RESPONSE FORMAT
+        const safeWithdrawals = withdrawals.map(withdrawal => ({
+            _id: withdrawal._id,
+            amount: withdrawal.amount || 0,
+            fee: withdrawal.fee || 0,
+            finalAmount: withdrawal.finalAmount || 0,
+            bankAccount: withdrawal.bankAccount || {
+                bankName: 'Unknown',
+                accountNumber: 'Unknown', 
+                accountHolder: 'Unknown'
+            },
+            status: withdrawal.status || 'pending',
+            adminNotes: withdrawal.adminNotes || '',
+            createdAt: withdrawal.createdAt,
+            processedAt: withdrawal.processedAt
+        }));
+        
+        res.json({
+            success: true,
+            withdrawals: safeWithdrawals,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalWithdrawals,
+                pages: Math.ceil(totalWithdrawals / limitNum)
+            }
+        });
+        
+        console.log(`✅ Withdrawals loaded successfully: ${safeWithdrawals.length} withdrawals`);
+        
     } catch (error) {
-        console.error('❌ Withdrawals error:', error);
-        res.status(500).json({ error: 'Failed to load withdrawals' });
+        console.error('❌ User withdrawals error:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load withdrawals',
+            message: error.message
+        });
     }
 });
 
@@ -5216,16 +5811,61 @@ setInterval(() => {
     }
 }, 30000);
 
+// ✅ DEBUG ENDPOINTS - UNTUK TESTING (TAMBAH DI SINI)
+app.get('/api/debug/user-data/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const [user, tradesCount, depositsCount, withdrawalsCount] = await Promise.all([
+            User.findById(userId).select('-password'),
+            Trade.countDocuments({ userId }),
+            Deposit.countDocuments({ userId }),
+            Withdrawal.countDocuments({ userId })
+        ]);
+        
+        res.json({
+            debug: true,
+            user: user || 'Not found',
+            counts: {
+                trades: tradesCount,
+                deposits: depositsCount,
+                withdrawals: withdrawalsCount
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            debug: true,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// ✅ AUTH TEST ENDPOINT
+app.get('/api/auth/test', authenticateToken, (req, res) => {
+    res.json({
+        success: true,
+        message: 'Authentication working correctly',
+        user: {
+            id: req.user._id,
+            name: req.user.name,
+            email: req.user.email,
+            phone: req.user.phone,
+            isActive: req.user.isActive
+        },
+        timestamp: new Date().toISOString()
+    });
+});
+
 // ========================================
 // ✅ ENHANCED ERROR HANDLING
 // ========================================
 
 app.use((error, req, res, next) => {
-    console.error('❌ Global error:', error);
-    
-    console.error('Error details:', {
+    console.error('❌ Global error:', {
         message: error.message,
-        stack: error.stack,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
         url: req.url,
         method: req.method,
         ip: req.ip,
@@ -5235,36 +5875,48 @@ app.use((error, req, res, next) => {
     
     const isDevelopment = process.env.NODE_ENV === 'development';
     
-    // ✅ ENHANCED ERROR RESPONSE
+    // ✅ CONSISTENT ERROR RESPONSE FORMAT
     let statusCode = error.status || 500;
     let errorMessage = 'Internal server error';
+    let errorCode = 'SERVER_ERROR';
     
     // Handle specific error types
     if (error.name === 'ValidationError') {
         statusCode = 400;
         errorMessage = 'Validation failed';
+        errorCode = 'VALIDATION_ERROR';
     } else if (error.name === 'CastError') {
         statusCode = 400;
         errorMessage = 'Invalid data format';
+        errorCode = 'INVALID_DATA';
     } else if (error.code === 11000) {
         statusCode = 409;
-        errorMessage = 'Duplicate data conflict';
-    } else if (error.name === 'MongoNetworkError') {
+        errorMessage = 'Data sudah ada dalam sistem';
+        errorCode = 'DUPLICATE_DATA';
+    } else if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
         statusCode = 503;
         errorMessage = 'Database connection error';
+        errorCode = 'DATABASE_ERROR';
     } else if (error.name === 'JsonWebTokenError') {
         statusCode = 401;
         errorMessage = 'Invalid authentication token';
+        errorCode = 'INVALID_TOKEN';
     } else if (error.name === 'TokenExpiredError') {
         statusCode = 401;
         errorMessage = 'Authentication token expired';
+        errorCode = 'TOKEN_EXPIRED';
     }
     
     res.status(statusCode).json({ 
+        success: false,
         error: errorMessage,
+        code: errorCode,
         message: isDevelopment ? error.message : 'Something went wrong',
         timestamp: new Date().toISOString(),
-        ...(isDevelopment && { stack: error.stack })
+        ...(isDevelopment && { 
+            stack: error.stack,
+            originalError: error.message 
+        })
     });
 });
 
@@ -5321,6 +5973,71 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 
+// ✅ HELPER FUNCTIONS untuk backward compatibility
+function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+}
+
+function isValidPhone(phone) {
+    if (!phone || typeof phone !== 'string') return false;
+    const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+    
+    // Indonesian phone patterns
+    const patterns = [
+        /^628\d{8,11}$/,     // 628xxxxxxxx
+        /^08\d{8,11}$/,      // 08xxxxxxxx
+        /^8\d{9,12}$/,       // 8xxxxxxxxx
+        /^62\d{9,12}$/       // 62xxxxxxxxx
+    ];
+    
+    return patterns.some(pattern => pattern.test(cleanPhone));
+}
+
+function normalizePhone(phone) {
+    if (!phone) return null;
+    
+    let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+    
+    if (cleanPhone.startsWith('08')) {
+        return '628' + cleanPhone.substring(2);
+    } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+        return '62' + cleanPhone;
+    } else if (cleanPhone.startsWith('62')) {
+        return cleanPhone;
+    }
+    
+    return cleanPhone;
+}
+
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount || 0);
+}
+
+async function logActivity(userId, action, details = '', req = null) {
+    try {
+        await Activity.create({
+            userId,
+            action,
+            details,
+            ip: req?.ip || req?.connection?.remoteAddress,
+            userAgent: req?.get('User-Agent'),
+            createdAt: new Date()
+        });
+        console.log(`📝 Activity logged: ${action} - ${details}`);
+    } catch (error) {
+        console.error('❌ Error logging activity:', error);
+    }
+}
+
+console.log('✅ Helper functions loaded successfully');
+
 // ========================================
 // ✅ ENHANCED SERVER STARTUP - SUPER OPTIMIZED
 // ========================================
@@ -5333,15 +6050,15 @@ async function startServer() {
         
         // ✅ FIXED: MongoDB connection tanpa opsi yang bermasalah
         await mongoose.connect(process.env.MONGODB_URI, {
-            serverSelectionTimeoutMS: 10000,
-            socketTimeoutMS: 45000,
+            serverSelectionTimeoutMS: 15000,    // ✅ Increased timeout
+            socketTimeoutMS: 60000,             // ✅ Increased timeout
+            connectTimeoutMS: 15000,            // ✅ Increased timeout
             maxPoolSize: 10,
             retryWrites: true,
             w: 'majority',
-            connectTimeoutMS: 10000,
             heartbeatFrequencyMS: 10000,
-            maxIdleTimeMS: 30000
-        });
+            maxIdleTimeMS: 60000                // ✅ Increased timeout
+        });        
         
         console.log('✅ Connected to MongoDB');
         
