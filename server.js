@@ -179,6 +179,38 @@ app.use((req, res, next) => {
     next();
 });
 
+// ✅ STATIC FILES SERVING
+app.use(express.static('public', {
+    maxAge: '1d',
+    etag: false
+}));
+
+// ✅ SPECIFIC ROUTE FOR QRIS IMAGE
+app.get('/qris.png', (req, res) => {
+    res.sendFile(__dirname + '/public/qris.png', (err) => {
+        if (err) {
+            console.log('❌ QRIS image not found, sending placeholder');
+            res.status(404).json({ 
+                error: 'QRIS image not found',
+                message: 'Please upload qris.png to public folder'
+            });
+        }
+    });
+});
+
+app.get('/qris.jpg', (req, res) => {
+    res.sendFile(__dirname + '/public/qris.jpg', (err) => {
+        if (err) {
+            console.log('❌ QRIS image not found, sending placeholder');
+            res.status(404).json({ 
+                error: 'QRIS image not found',
+                message: 'Please upload qris.jpg to public folder'
+            });
+        }
+    });
+});
+
+
 // Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -2787,44 +2819,109 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { email, phone, password } = req.body;
-        const identifier = email || phone;
+        const { email, phone, password, identifier } = req.body;
+        const loginIdentifier = identifier || email || phone;
         
         console.log('📝 Login attempt:', { 
-            email: email || 'none', 
-            phone: phone || 'none',
-            hasPassword: !!password
+            identifier: loginIdentifier || 'none',
+            hasPassword: !!password,
+            timestamp: new Date().toISOString()
         });
         
-        // ✅ BASIC VALIDATION
-        if (!identifier || !password) {
-            return ResponseUtils.validationError(res, 'Email/HP dan password diperlukan');
+        // ✅ ENHANCED VALIDATION
+        if (!loginIdentifier || !password) {
+            return res.status(400).json({
+                success: false,
+                error: 'Email/HP dan password diperlukan',
+                code: 'MISSING_CREDENTIALS'
+            });
         }
 
-        // ✅ FIND USER BY IDENTIFIER
-        const user = await UserUtils.findByIdentifier(identifier, User);
+        // ✅ FIND USER WITH BETTER ERROR HANDLING
+        let user = null;
         
-        if (!user || !user.isActive) {
-            return ResponseUtils.error(res, 'Email/HP atau password salah', 401);
+        try {
+            // Try email first
+            if (ValidationUtils.email.isValid(loginIdentifier)) {
+                const normalizedEmail = ValidationUtils.email.normalize(loginIdentifier);
+                user = await User.findOne({ email: normalizedEmail }).maxTimeMS(10000);
+            }
+            
+            // Try phone if email search failed
+            if (!user && ValidationUtils.phone.isValid(loginIdentifier)) {
+                const normalizedPhone = ValidationUtils.phone.normalize(loginIdentifier);
+                user = await User.findOne({ phone: normalizedPhone }).maxTimeMS(10000);
+            }
+            
+            // Last resort: try direct search
+            if (!user) {
+                user = await User.findOne({
+                    $or: [
+                        { email: loginIdentifier.toLowerCase().trim() },
+                        { phone: ValidationUtils.phone.normalize(loginIdentifier) }
+                    ]
+                }).maxTimeMS(10000);
+            }
+            
+        } catch (dbError) {
+            console.error('❌ Database error during login:', dbError);
+            return res.status(503).json({
+                success: false,
+                error: 'Server sedang bermasalah. Silakan coba lagi.',
+                code: 'DATABASE_ERROR'
+            });
+        }
+        
+        if (!user) {
+            console.log('❌ User not found for identifier:', loginIdentifier);
+            return res.status(401).json({
+                success: false,
+                error: 'Email/HP atau password salah',
+                code: 'INVALID_CREDENTIALS'
+            });
+        }
+        
+        if (!user.isActive) {
+            console.log('❌ User account deactivated:', user.email || user.phone);
+            return res.status(403).json({
+                success: false,
+                error: 'Akun Anda telah dinonaktifkan',
+                code: 'ACCOUNT_DEACTIVATED'
+            });
         }
 
         // ✅ PASSWORD VALIDATION
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
-            return ResponseUtils.error(res, 'Email/HP atau password salah', 401);
+            console.log('❌ Invalid password for user:', user.email || user.phone);
+            return res.status(401).json({
+                success: false,
+                error: 'Email/HP atau password salah',
+                code: 'INVALID_CREDENTIALS'
+            });
         }
 
-        // Update last login
-        await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
+        // ✅ UPDATE LAST LOGIN
+        try {
+            await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() }).maxTimeMS(5000);
+        } catch (updateError) {
+            console.error('❌ Failed to update last login:', updateError);
+            // Continue anyway, this is not critical
+        }
 
         // ✅ LOG ACTIVITY
-        await ActivityLogger.log(
-            user._id, 
-            'USER_LOGIN',
-            `User logged in: ${identifier}`,
-            req,
-            Activity
-        );
+        try {
+            await ActivityLogger.log(
+                user._id, 
+                'USER_LOGIN',
+                `User logged in: ${loginIdentifier}`,
+                req,
+                Activity
+            );
+        } catch (logError) {
+            console.error('❌ Failed to log activity:', logError);
+            // Continue anyway
+        }
 
         // ✅ GENERATE TOKEN
         const token = jwt.sign(
@@ -2833,20 +2930,58 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             { expiresIn: '7d' }
         );
 
-        // ✅ SUCCESS RESPONSE
-        const userResponse = { ...user };
-        delete userResponse.password;
+        // ✅ PREPARE SAFE USER RESPONSE
+        const userResponse = {
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            balance: user.balance || 0,
+            accountType: user.accountType || 'standard',
+            isActive: user.isActive,
+            totalProfit: user.totalProfit || 0,
+            totalLoss: user.totalLoss || 0,
+            adminSettings: user.adminSettings || {
+                profitCollapse: 'normal',
+                profitPercentage: 80
+            },
+            stats: user.stats || {
+                totalTrades: 0,
+                winTrades: 0,
+                loseTrades: 0
+            },
+            bankData: user.bankData || {
+                bankName: '',
+                accountNumber: '',
+                accountHolder: ''
+            },
+            createdAt: user.createdAt
+        };
 
-        ResponseUtils.success(res, {
+        // ✅ SUCCESS RESPONSE
+        res.status(200).json({
+            success: true,
+            message: 'Login berhasil',
             token,
-            user: userResponse
-        }, 'Login berhasil');
+            user: userResponse,
+            timestamp: new Date().toISOString()
+        });
+        
+        console.log(`✅ Login successful for user: ${user.name} (${user.email || user.phone})`);
         
     } catch (error) {
         console.error('❌ Login error:', error);
-        ResponseUtils.error(res, 'Login gagal. Silakan coba lagi.');
+        console.error('Error stack:', error.stack);
+        
+        res.status(500).json({
+            success: false,
+            error: 'Server error. Silakan coba lagi.',
+            code: 'SERVER_ERROR',
+            timestamp: new Date().toISOString()
+        });
     }
 });
+
 
 // ========================================
 // USER ROUTES
@@ -5636,11 +5771,9 @@ app.get('/api/auth/test', authenticateToken, (req, res) => {
 // ========================================
 
 app.use((error, req, res, next) => {
-    console.error('❌ Global error:', error);
-    
-    console.error('Error details:', {
+    console.error('❌ Global error:', {
         message: error.message,
-        stack: error.stack,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
         url: req.url,
         method: req.method,
         ip: req.ip,
@@ -5650,36 +5783,48 @@ app.use((error, req, res, next) => {
     
     const isDevelopment = process.env.NODE_ENV === 'development';
     
-    // ✅ ENHANCED ERROR RESPONSE
+    // ✅ CONSISTENT ERROR RESPONSE FORMAT
     let statusCode = error.status || 500;
     let errorMessage = 'Internal server error';
+    let errorCode = 'SERVER_ERROR';
     
     // Handle specific error types
     if (error.name === 'ValidationError') {
         statusCode = 400;
         errorMessage = 'Validation failed';
+        errorCode = 'VALIDATION_ERROR';
     } else if (error.name === 'CastError') {
         statusCode = 400;
         errorMessage = 'Invalid data format';
+        errorCode = 'INVALID_DATA';
     } else if (error.code === 11000) {
         statusCode = 409;
-        errorMessage = 'Duplicate data conflict';
-    } else if (error.name === 'MongoNetworkError') {
+        errorMessage = 'Data sudah ada dalam sistem';
+        errorCode = 'DUPLICATE_DATA';
+    } else if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
         statusCode = 503;
         errorMessage = 'Database connection error';
+        errorCode = 'DATABASE_ERROR';
     } else if (error.name === 'JsonWebTokenError') {
         statusCode = 401;
         errorMessage = 'Invalid authentication token';
+        errorCode = 'INVALID_TOKEN';
     } else if (error.name === 'TokenExpiredError') {
         statusCode = 401;
         errorMessage = 'Authentication token expired';
+        errorCode = 'TOKEN_EXPIRED';
     }
     
     res.status(statusCode).json({ 
+        success: false,
         error: errorMessage,
+        code: errorCode,
         message: isDevelopment ? error.message : 'Something went wrong',
         timestamp: new Date().toISOString(),
-        ...(isDevelopment && { stack: error.stack })
+        ...(isDevelopment && { 
+            stack: error.stack,
+            originalError: error.message 
+        })
     });
 });
 
@@ -5813,15 +5958,15 @@ async function startServer() {
         
         // ✅ FIXED: MongoDB connection tanpa opsi yang bermasalah
         await mongoose.connect(process.env.MONGODB_URI, {
-            serverSelectionTimeoutMS: 10000,
-            socketTimeoutMS: 45000,
+            serverSelectionTimeoutMS: 15000,    // ✅ Increased timeout
+            socketTimeoutMS: 60000,             // ✅ Increased timeout
+            connectTimeoutMS: 15000,            // ✅ Increased timeout
             maxPoolSize: 10,
             retryWrites: true,
             w: 'majority',
-            connectTimeoutMS: 10000,
             heartbeatFrequencyMS: 10000,
-            maxIdleTimeMS: 30000
-        });
+            maxIdleTimeMS: 60000                // ✅ Increased timeout
+        });        
         
         console.log('✅ Connected to MongoDB');
         
