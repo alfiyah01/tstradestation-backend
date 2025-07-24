@@ -1,5 +1,5 @@
 // ========================================
-// 🆕 FILE BARU: server-utils.js
+// 🆕 FILE: server-utils.js (VERSI LENGKAP)
 // ========================================
 
 const bcrypt = require('bcryptjs');
@@ -187,9 +187,62 @@ const ActivityLogger = {
     }
 };
 
+// ✅ BACKWARD COMPATIBILITY FUNCTIONS (untuk server.js lama)
+function isValidEmail(email) {
+    return ValidationUtils.email.isValid(email);
+}
+
+function isValidPhone(phone) {
+    return ValidationUtils.phone.isValid(phone);
+}
+
+function normalizePhone(phone) {
+    return ValidationUtils.phone.normalize(phone);
+}
+
+// ✅ CURRENCY FORMATTER
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount || 0);
+}
+
+// ✅ ACTIVITY LOGGER (backward compatibility)
+async function logActivity(userId, action, details = '', req = null) {
+    try {
+        // Ini akan di-handle di server.js dengan Activity model
+        const activityData = {
+            userId,
+            action,
+            details,
+            createdAt: new Date()
+        };
+        
+        if (req) {
+            activityData.ip = req.ip || req.connection?.remoteAddress;
+            activityData.userAgent = req.get('User-Agent');
+        }
+        
+        console.log(`📝 Activity logged: ${action} - ${details}`);
+        return activityData; // Return data untuk diproses di server.js
+    } catch (error) {
+        console.error('❌ Error logging activity:', error);
+    }
+}
+
+// ✅ EXPORT SEMUA FUNCTIONS
 module.exports = {
     ValidationUtils,
     ResponseUtils,
     UserUtils,
-    ActivityLogger
+    ActivityLogger,
+    // Backward compatibility functions
+    isValidEmail,
+    isValidPhone,
+    normalizePhone,
+    formatCurrency,
+    logActivity
 };
