@@ -2819,17 +2819,17 @@ app.post('/api/register', authLimiter, checkDatabaseConnection, async (req, res)
 
 app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) => {
     try {
-        const { email, phone, password, identifier } = req.body;
-        const loginIdentifier = identifier || email || phone;
-        
-        console.log('📝 Login attempt:', { 
-            identifier: loginIdentifier || 'none',
-            hasPassword: !!password,
+        console.log('📝 Login request received:', {
+            body: req.body,
+            hasIdentifier: !!req.body.identifier,
+            hasPassword: !!req.body.password,
             timestamp: new Date().toISOString()
         });
+
+        const { identifier, password } = req.body;  // ✅ FIX: Destructure identifier, bukan email/phone
         
-        // ✅ ENHANCED VALIDATION
-        if (!loginIdentifier || !password) {
+        if (!identifier || !password) {
+            console.log('❌ Missing credentials');
             return res.status(400).json({
                 success: false,
                 error: 'Email/HP dan password diperlukan',
@@ -2837,43 +2837,54 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             });
         }
 
-        // ✅ FIND USER WITH BETTER ERROR HANDLING
+        console.log('🔍 Looking for user with identifier:', identifier);
+
+        // ✅ CARI USER DENGAN MULTIPLE ATTEMPTS
         let user = null;
         
         try {
-            // Try email first
-            if (ValidationUtils.email.isValid(loginIdentifier)) {
-                const normalizedEmail = ValidationUtils.email.normalize(loginIdentifier);
-                user = await User.findOne({ email: normalizedEmail }).maxTimeMS(10000);
+            // Coba sebagai email dulu
+            if (identifier.includes('@')) {
+                const normalizedEmail = identifier.toLowerCase().trim();
+                console.log('🔍 Searching by email:', normalizedEmail);
+                user = await User.findOne({ email: normalizedEmail }).maxTimeMS(15000);
             }
             
-            // Try phone if email search failed
-            if (!user && ValidationUtils.phone.isValid(loginIdentifier)) {
-                const normalizedPhone = ValidationUtils.phone.normalize(loginIdentifier);
-                user = await User.findOne({ phone: normalizedPhone }).maxTimeMS(10000);
-            }
-            
-            // Last resort: try direct search
+            // Jika tidak ketemu, coba sebagai phone
             if (!user) {
+                let normalizedPhone = identifier.replace(/[\s\-\(\)\+]/g, '');
+                if (normalizedPhone.startsWith('08')) {
+                    normalizedPhone = '628' + normalizedPhone.substring(2);
+                } else if (normalizedPhone.startsWith('8') && normalizedPhone.length >= 10) {
+                    normalizedPhone = '62' + normalizedPhone;
+                }
+                
+                console.log('🔍 Searching by phone:', normalizedPhone);
+                user = await User.findOne({ phone: normalizedPhone }).maxTimeMS(15000);
+            }
+            
+            // Last attempt: cari dengan query fleksibel
+            if (!user) {
+                console.log('🔍 Flexible search for:', identifier);
                 user = await User.findOne({
                     $or: [
-                        { email: loginIdentifier.toLowerCase().trim() },
-                        { phone: ValidationUtils.phone.normalize(loginIdentifier) }
+                        { email: identifier.toLowerCase().trim() },
+                        { phone: { $regex: identifier.replace(/[\s\-\(\)\+]/g, ''), $options: 'i' } }
                     ]
-                }).maxTimeMS(10000);
+                }).maxTimeMS(15000);
             }
             
         } catch (dbError) {
-            console.error('❌ Database error during login:', dbError);
+            console.error('❌ Database error during user search:', dbError);
             return res.status(503).json({
                 success: false,
-                error: 'Server sedang bermasalah. Silakan coba lagi.',
+                error: 'Database connection error',
                 code: 'DATABASE_ERROR'
             });
         }
         
         if (!user) {
-            console.log('❌ User not found for identifier:', loginIdentifier);
+            console.log('❌ User not found for identifier:', identifier);
             return res.status(401).json({
                 success: false,
                 error: 'Email/HP atau password salah',
@@ -2881,8 +2892,16 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             });
         }
         
+        console.log('✅ User found:', {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            isActive: user.isActive
+        });
+        
         if (!user.isActive) {
-            console.log('❌ User account deactivated:', user.email || user.phone);
+            console.log('❌ User account deactivated');
             return res.status(403).json({
                 success: false,
                 error: 'Akun Anda telah dinonaktifkan',
@@ -2890,37 +2909,26 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             });
         }
 
-        // ✅ PASSWORD VALIDATION
+        // ✅ VALIDASI PASSWORD
+        console.log('🔐 Validating password...');
         const isValidPassword = await bcrypt.compare(password, user.password);
         if (!isValidPassword) {
-            console.log('❌ Invalid password for user:', user.email || user.phone);
+            console.log('❌ Invalid password');
             return res.status(401).json({
                 success: false,
                 error: 'Email/HP atau password salah',
                 code: 'INVALID_CREDENTIALS'
             });
         }
+        
+        console.log('✅ Password valid');
 
         // ✅ UPDATE LAST LOGIN
         try {
-            await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() }).maxTimeMS(5000);
+            await User.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
+            console.log('✅ Last login updated');
         } catch (updateError) {
-            console.error('❌ Failed to update last login:', updateError);
-            // Continue anyway, this is not critical
-        }
-
-        // ✅ LOG ACTIVITY
-        try {
-            await ActivityLogger.log(
-                user._id, 
-                'USER_LOGIN',
-                `User logged in: ${loginIdentifier}`,
-                req,
-                Activity
-            );
-        } catch (logError) {
-            console.error('❌ Failed to log activity:', logError);
-            // Continue anyway
+            console.error('⚠️ Failed to update last login:', updateError);
         }
 
         // ✅ GENERATE TOKEN
@@ -2929,8 +2937,10 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
+        
+        console.log('✅ Token generated');
 
-        // ✅ PREPARE SAFE USER RESPONSE
+        // ✅ PREPARE USER RESPONSE
         const userResponse = {
             _id: user._id,
             name: user.name,
@@ -2943,7 +2953,9 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             totalLoss: user.totalLoss || 0,
             adminSettings: user.adminSettings || {
                 profitCollapse: 'normal',
-                profitPercentage: 80
+                profitPercentage: 80,
+                forceWin: false,
+                forceWinRate: 0
             },
             stats: user.stats || {
                 totalTrades: 0,
@@ -2958,16 +2970,32 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
             createdAt: user.createdAt
         };
 
+        // ✅ LOG ACTIVITY
+        try {
+            await Activity.create({
+                userId: user._id,
+                action: 'USER_LOGIN',
+                details: `User logged in: ${identifier}`,
+                ip: req.ip,
+                userAgent: req.get('User-Agent'),
+                createdAt: new Date()
+            });
+            console.log('✅ Activity logged');
+        } catch (logError) {
+            console.error('⚠️ Failed to log activity:', logError);
+        }
+
         // ✅ SUCCESS RESPONSE
-        res.status(200).json({
+        const response = {
             success: true,
             message: 'Login berhasil',
             token,
             user: userResponse,
             timestamp: new Date().toISOString()
-        });
+        };
         
-        console.log(`✅ Login successful for user: ${user.name} (${user.email || user.phone})`);
+        console.log('✅ Login successful for user:', user.name);
+        res.status(200).json(response);
         
     } catch (error) {
         console.error('❌ Login error:', error);
@@ -2981,7 +3009,6 @@ app.post('/api/login', authLimiter, checkDatabaseConnection, async (req, res) =>
         });
     }
 });
-
 
 // ========================================
 // USER ROUTES
