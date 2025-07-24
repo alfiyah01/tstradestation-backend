@@ -145,14 +145,94 @@ app.use(cors({
     preflightContinue: false
 }));
 
-// ✅ TAMBAHAN CORS MANUAL HANDLING
+// ✅ ENHANCED BODY PARSING MIDDLEWARE - LETAKKAN SETELAH CORS
+app.use(express.json({ 
+    limit: '10mb',
+    strict: false,
+    type: ['application/json', 'text/plain']
+}));
+
+app.use(express.urlencoded({ 
+    extended: true, 
+    limit: '10mb',
+    parameterLimit: 50000
+}));
+
+// ✅ TAMBAHKAN MIDDLEWARE DEBUG UNTUK CEK REQUEST BODY
+app.use((req, res, next) => {
+    if (req.path.includes('/api/login') || req.path.includes('/api/register')) {
+        console.log('🔍 Auth Request Debug:', {
+            method: req.method,
+            path: req.path,
+            contentType: req.get('Content-Type'),
+            contentLength: req.get('Content-Length'),
+            bodyExists: !!req.body,
+            bodyKeys: req.body ? Object.keys(req.body) : 'no body',
+            body: req.body,
+            hasEmail: req.body?.email ? 'yes' : 'no',
+            hasPhone: req.body?.phone ? 'yes' : 'no',
+            hasPassword: req.body?.password ? 'yes' : 'no',
+            timestamp: new Date().toISOString()
+        });
+    }
+    next();
+});
+
+// ✅ MIDDLEWARE KHUSUS UNTUK LOGIN - TAMBAHKAN PARSING MANUAL JIKA DIPERLUKAN
+app.use('/api/login', (req, res, next) => {
+    console.log('🔍 Pre-login middleware check:', {
+        method: req.method,
+        contentType: req.get('Content-Type'),
+        contentLength: req.get('Content-Length'),
+        body: req.body,
+        rawBody: req.rawBody,
+        hasBody: !!req.body
+    });
+    
+    // Jika body kosong dan method POST, coba parse manual
+    if (!req.body && req.method === 'POST') {
+        console.log('⚠️ Empty body detected, attempting manual parse...');
+        
+        let rawData = '';
+        req.on('data', chunk => {
+            rawData += chunk;
+        });
+        
+        req.on('end', () => {
+            try {
+                if (rawData) {
+                    req.body = JSON.parse(rawData);
+                    console.log('✅ Manual parse successful:', req.body);
+                } else {
+                    console.log('❌ No raw data received');
+                    req.body = {};
+                }
+                next();
+            } catch (parseError) {
+                console.error('❌ Manual parse failed:', parseError);
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid JSON in request body',
+                    details: parseError.message,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        });
+    } else {
+        next();
+    }
+});
+
+// ✅ TAMBAHKAN MIDDLEWARE CORS MANUAL UNTUK HANDLE PREFLIGHT
 app.use((req, res, next) => {
     const allowedOrigins = [
         "https://www.traderstasion.com",
-        "https://traderstasion.com",
+        "https://traderstasion.com", 
+        "https://www.traderstasion.com/",
+        "https://traderstasion.com/",
         "https://traderstasion.netlify.app",
-        "http://localhost:3000",
-        "http://127.0.0.1:5500",
+        "http://localhost:3000", 
+        "http://127.0.0.1:5500", 
         "http://localhost:5500"
     ];
     
@@ -185,6 +265,24 @@ app.use(express.static('public', {
     etag: false
 }));
 
+// ✅ TAMBAHKAN MIDDLEWARE TAMBAHAN UNTUK MEMASTIKAN BODY PARSING
+app.use('/api/*', (req, res, next) => {
+    // Pastikan Content-Type header ada untuk POST requests
+    if (req.method === 'POST' && !req.get('Content-Type')) {
+        req.headers['content-type'] = 'application/json';
+    }
+    
+    // Log semua request ke API
+    console.log(`📡 API Request: ${req.method} ${req.path}`, {
+        contentType: req.get('Content-Type'),
+        hasBody: !!req.body,
+        bodyType: typeof req.body,
+        bodyKeys: req.body ? Object.keys(req.body) : null
+    });
+    
+    next();
+});
+
 // ✅ SPECIFIC ROUTE FOR QRIS IMAGE
 app.get('/qris.png', (req, res) => {
     res.sendFile(__dirname + '/public/qris.png', (err) => {
@@ -209,6 +307,119 @@ app.get('/qris.jpg', (req, res) => {
         }
     });
 });
+
+// ========================================
+// ✅ HELPER FUNCTIONS - LETAKKAN HELPER FUNCTIONS DI SINI
+// ========================================
+
+function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+}
+
+function isValidPhone(phone) {
+    if (!phone || typeof phone !== 'string') return false;
+    const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+    
+    // Indonesian phone patterns
+    const patterns = [
+        /^628\d{8,11}$/,     // 628xxxxxxxx
+        /^08\d{8,11}$/,      // 08xxxxxxxx
+        /^8\d{9,12}$/,       // 8xxxxxxxxx
+        /^62\d{9,12}$/       // 62xxxxxxxxx
+    ];
+    
+    return patterns.some(pattern => pattern.test(cleanPhone));
+}
+
+function normalizePhone(phone) {
+    if (!phone) return null;
+    
+    let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+    
+    if (cleanPhone.startsWith('08')) {
+        return '628' + cleanPhone.substring(2);
+    } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
+        return '62' + cleanPhone;
+    } else if (cleanPhone.startsWith('62')) {
+        return cleanPhone;
+    }
+    
+    return cleanPhone;
+}
+
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('id-ID', {
+        style: 'currency',
+        currency: 'IDR',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(amount || 0);
+}
+
+function formatPhoneNumber(phone) {
+    if (!phone) return null;
+    
+    const normalized = normalizePhone(phone);
+    
+    if (normalized && normalized.startsWith('+62') && normalized.length >= 13) {
+        const countryCode = '62';
+        const number = normalized.substring(3);
+        const firstPart = number.substring(0, 3);
+        const secondPart = number.substring(3, 7);
+        const thirdPart = number.substring(7);
+        
+        return `+${countryCode} ${firstPart}-${secondPart}-${thirdPart}`;
+    }
+    
+    return phone;
+}
+
+function validateInput(data, requiredFields = []) {
+    const errors = [];
+    
+    for (const field of requiredFields) {
+        if (!data[field] || data[field].toString().trim().length === 0) {
+            errors.push(`${field} is required`);
+        }
+    }
+    
+    if (data.amount !== undefined) {
+        const amount = parseFloat(data.amount);
+        if (isNaN(amount) || amount <= 0) {
+            errors.push('Amount must be a valid positive number');
+        }
+    }
+    
+    if (data.email && !isValidEmail(data.email)) {
+        errors.push('Invalid email format');
+    }
+    
+    if (data.phone && !isValidPhone(data.phone)) {
+        errors.push('Invalid phone format');
+    }
+    
+    return errors;
+}
+
+async function logActivity(userId, action, details = '', req = null) {
+    try {
+        await Activity.create({
+            userId,
+            action,
+            details,
+            ip: req?.ip || req?.connection?.remoteAddress,
+            userAgent: req?.get('User-Agent'),
+            createdAt: new Date()
+        });
+        console.log(`📝 Activity logged: ${action} - ${details}`);
+    } catch (error) {
+        console.error('❌ Error logging activity:', error);
+    }
+}
+
+console.log('✅ Helper functions loaded successfully');
 
 
 // Rate limiting
@@ -1186,60 +1397,6 @@ const requireAdmin = async (req, res, next) => {
         return res.status(403).json({ error: 'Admin verification failed' });
     }
 };
-
-function formatCurrency(amount) {
-    return new Intl.NumberFormat('id-ID', {
-        style: 'currency',
-        currency: 'IDR',
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0
-    }).format(amount || 0);
-}
-
-function formatPhoneNumber(phone) {
-    if (!phone) return null;
-    
-    const normalized = normalizePhone(phone);
-    
-    if (normalized && normalized.startsWith('+62') && normalized.length >= 13) {
-        const countryCode = '62';
-        const number = normalized.substring(3);
-        const firstPart = number.substring(0, 3);
-        const secondPart = number.substring(3, 7);
-        const thirdPart = number.substring(7);
-        
-        return `+${countryCode} ${firstPart}-${secondPart}-${thirdPart}`;
-    }
-    
-    return phone;
-}
-
-function validateInput(data, requiredFields = []) {
-    const errors = [];
-    
-    for (const field of requiredFields) {
-        if (!data[field] || data[field].toString().trim().length === 0) {
-            errors.push(`${field} is required`);
-        }
-    }
-    
-    if (data.amount !== undefined) {
-        const amount = parseFloat(data.amount);
-        if (isNaN(amount) || amount <= 0) {
-            errors.push('Amount must be a valid positive number');
-        }
-    }
-    
-    if (data.email && !isValidEmail(data.email)) {
-        errors.push('Invalid email format');
-    }
-    
-    if (data.phone && !isValidPhone(data.phone)) {
-        errors.push('Invalid phone format');
-    }
-    
-    return errors;
-}
 
 // ========================================
 // 🛡️ SAFE DATABASE MIGRATION - TIDAK MENGHAPUS DATA USER
@@ -3117,111 +3274,6 @@ const authenticateAdminToken = async (req, res, next) => {
         });
     }
 };
-
-// ✅ UPDATE ALL ADMIN ROUTES TO USE NEW MIDDLEWARE
-// Replace all instances of:
-// app.get('/api/admin/*', authenticateToken, requireAdmin, ...)
-// With:
-// app.get('/api/admin/*', authenticateAdminToken, ...)
-
-// ✅ EXAMPLE UPDATED ADMIN DASHBOARD ROUTE
-app.get('/api/admin/dashboard', authenticateAdminToken, async (req, res) => {
-    try {
-        console.log('📊 Loading admin dashboard for:', req.user.email);
-        
-        const [
-            totalUsers,
-            activeUsers,
-            totalTrades,
-            activeTrades,
-            totalDeposits,
-            pendingDeposits,
-            totalWithdrawals,
-            pendingWithdrawals,
-            totalBankAccounts,
-            activeBankAccounts
-        ] = await Promise.all([
-            User.countDocuments(),
-            User.countDocuments({ isActive: true }),
-            Trade.countDocuments(),
-            Trade.countDocuments({ status: 'active' }),
-            Deposit.countDocuments(),
-            Deposit.countDocuments({ status: 'pending' }),
-            Withdrawal.countDocuments(),
-            Withdrawal.countDocuments({ status: 'pending' }),
-            BankAccount.countDocuments(),
-            BankAccount.countDocuments({ isActive: true })
-        ]);
-        
-        const completedTrades = await Trade.find({ status: 'completed' }).select('amount').lean();
-        const totalVolume = completedTrades.reduce((sum, trade) => sum + (trade.amount || 0), 0);
-        
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayTrades = await Trade.find({ 
-            status: 'completed',
-            createdAt: { $gte: today }
-        }).select('amount').lean();
-        const todayVolume = todayTrades.reduce((sum, trade) => sum + (trade.amount || 0), 0);
-        
-        const recentActivities = await Activity.find()
-            .populate('userId', 'name email phone')
-            .sort({ createdAt: -1 })
-            .limit(15)
-            .lean();
-        
-        // 🎯 PAYMENT METHOD STATS
-        const [bankDeposits, qrisDeposits, bankAmount, qrisAmount] = await Promise.all([
-            Deposit.countDocuments({ method: 'bank', status: 'approved' }),
-            Deposit.countDocuments({ method: 'qris', status: 'approved' }),
-            Deposit.aggregate([
-                { $match: { method: 'bank', status: 'approved' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]),
-            Deposit.aggregate([
-                { $match: { method: 'qris', status: 'approved' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ])
-        ]);
-
-        const stats = {
-            users: { total: totalUsers, active: activeUsers },
-            trades: { 
-                total: totalTrades, 
-                active: activeTrades,
-                maxAmount: 1000000000
-            },
-            deposits: { total: totalDeposits, pending: pendingDeposits },
-            withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals },
-            volume: { total: totalVolume, today: todayVolume },
-            bankAccounts: { total: totalBankAccounts, active: activeBankAccounts },
-            paymentMethods: {
-                bank: { count: bankDeposits, amount: bankAmount[0]?.total || 0 },
-                qris: { count: qrisDeposits, amount: qrisAmount[0]?.total || 0 }
-            }
-        };
-        
-        console.log('✅ Dashboard stats loaded successfully');
-        
-        res.json({ 
-            stats,
-            recentActivities,
-            success: true,
-            timestamp: new Date().toISOString()
-        });
-        
-    } catch (error) {
-        console.error('❌ Admin dashboard error:', error);
-        res.status(500).json({ 
-            error: 'Failed to load dashboard',
-            success: false,
-            message: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
-
-console.log('✅ FIXED LOGIN ENDPOINTS - Updated for admin panel compatibility');
 
 // ========================================
 // USER ROUTES
@@ -5878,6 +5930,110 @@ app.post('/api/admin/users/bulk', authenticateToken, requireAdmin, async (req, r
 });
 
 // ========================================
+// 🐛 DEBUG & TESTING ENDPOINTS
+// ========================================
+
+// ✅ DEBUG ENDPOINT UNTUK TEST BODY PARSING
+app.post('/api/debug/body-test', (req, res) => {
+    console.log('🧪 Body test endpoint called:', {
+        method: req.method,
+        contentType: req.get('Content-Type'),
+        hasBody: !!req.body,
+        body: req.body,
+        bodyString: JSON.stringify(req.body),
+        headers: req.headers
+    });
+    
+    res.json({
+        success: true,
+        received: {
+            body: req.body,
+            contentType: req.get('Content-Type'),
+            hasBody: !!req.body,
+            bodyType: typeof req.body,
+            bodyKeys: req.body ? Object.keys(req.body) : null
+        },
+        message: 'Body parsing test successful',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ✅ DEBUG ENDPOINT UNTUK TEST LOGIN PARSING
+app.post('/api/debug/login-test', (req, res) => {
+    console.log('🔐 Login debug test:', {
+        method: req.method,
+        path: req.path,
+        contentType: req.get('Content-Type'),
+        body: req.body,
+        hasEmail: req.body?.email ? 'YES' : 'NO',
+        hasPassword: req.body?.password ? 'YES' : 'NO',
+        bodyKeys: req.body ? Object.keys(req.body) : 'NO BODY',
+        headers: {
+            'content-type': req.get('Content-Type'),
+            'content-length': req.get('Content-Length'),
+            'user-agent': req.get('User-Agent')
+        }
+    });
+    
+    res.json({
+        success: true,
+        message: 'Login test successful',
+        bodyReceived: !!req.body,
+        bodyData: req.body,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ✅ DEBUG USER DATA
+app.get('/api/debug/user-data/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const [user, tradesCount, depositsCount, withdrawalsCount] = await Promise.all([
+            User.findById(userId).select('-password'),
+            Trade.countDocuments({ userId }),
+            Deposit.countDocuments({ userId }),
+            Withdrawal.countDocuments({ userId })
+        ]);
+        
+        res.json({
+            debug: true,
+            user: user || 'Not found',
+            counts: {
+                trades: tradesCount,
+                deposits: depositsCount,
+                withdrawals: withdrawalsCount
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            debug: true,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// ✅ AUTH TEST ENDPOINT
+app.get('/api/auth/test', authenticateToken, (req, res) => {
+    res.json({
+        success: true,
+        message: 'Authentication working correctly',
+        user: {
+            id: req.user._id,
+            name: req.user.name,
+            email: req.user.email,
+            phone: req.user.phone,
+            isActive: req.user.isActive
+        },
+        timestamp: new Date().toISOString()
+    });
+});
+
+console.log('🐛 Debug endpoints loaded successfully');
+
+// ========================================
 // ✅ ENHANCED SOCKET.IO HANDLING
 // ========================================
 
@@ -5958,53 +6114,6 @@ setInterval(() => {
         });
     }
 }, 30000);
-
-// ✅ DEBUG ENDPOINTS - UNTUK TESTING (TAMBAH DI SINI)
-app.get('/api/debug/user-data/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        
-        const [user, tradesCount, depositsCount, withdrawalsCount] = await Promise.all([
-            User.findById(userId).select('-password'),
-            Trade.countDocuments({ userId }),
-            Deposit.countDocuments({ userId }),
-            Withdrawal.countDocuments({ userId })
-        ]);
-        
-        res.json({
-            debug: true,
-            user: user || 'Not found',
-            counts: {
-                trades: tradesCount,
-                deposits: depositsCount,
-                withdrawals: withdrawalsCount
-            },
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        res.status(500).json({ 
-            debug: true,
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
-
-// ✅ AUTH TEST ENDPOINT
-app.get('/api/auth/test', authenticateToken, (req, res) => {
-    res.json({
-        success: true,
-        message: 'Authentication working correctly',
-        user: {
-            id: req.user._id,
-            name: req.user.name,
-            email: req.user.email,
-            phone: req.user.phone,
-            isActive: req.user.isActive
-        },
-        timestamp: new Date().toISOString()
-    });
-});
 
 // ========================================
 // ✅ ENHANCED ERROR HANDLING
@@ -6119,72 +6228,6 @@ function gracefulShutdown(signal) {
     
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-
-// ✅ HELPER FUNCTIONS untuk backward compatibility
-function isValidEmail(email) {
-    if (!email || typeof email !== 'string') return false;
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email.trim());
-}
-
-function isValidPhone(phone) {
-    if (!phone || typeof phone !== 'string') return false;
-    const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
-    
-    // Indonesian phone patterns
-    const patterns = [
-        /^628\d{8,11}$/,     // 628xxxxxxxx
-        /^08\d{8,11}$/,      // 08xxxxxxxx
-        /^8\d{9,12}$/,       // 8xxxxxxxxx
-        /^62\d{9,12}$/       // 62xxxxxxxxx
-    ];
-    
-    return patterns.some(pattern => pattern.test(cleanPhone));
-}
-
-function normalizePhone(phone) {
-    if (!phone) return null;
-    
-    let cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
-    
-    if (cleanPhone.startsWith('08')) {
-        return '628' + cleanPhone.substring(2);
-    } else if (cleanPhone.startsWith('8') && cleanPhone.length >= 10) {
-        return '62' + cleanPhone;
-    } else if (cleanPhone.startsWith('62')) {
-        return cleanPhone;
-    }
-    
-    return cleanPhone;
-}
-
-function formatCurrency(amount) {
-    return new Intl.NumberFormat('id-ID', {
-        style: 'currency',
-        currency: 'IDR',
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0
-    }).format(amount || 0);
-}
-
-async function logActivity(userId, action, details = '', req = null) {
-    try {
-        await Activity.create({
-            userId,
-            action,
-            details,
-            ip: req?.ip || req?.connection?.remoteAddress,
-            userAgent: req?.get('User-Agent'),
-            createdAt: new Date()
-        });
-        console.log(`📝 Activity logged: ${action} - ${details}`);
-    } catch (error) {
-        console.error('❌ Error logging activity:', error);
-    }
-}
-
-console.log('✅ Helper functions loaded successfully');
 
 // ========================================
 // ✅ ENHANCED SERVER STARTUP - SUPER OPTIMIZED
