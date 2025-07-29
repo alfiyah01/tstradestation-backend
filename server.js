@@ -88,9 +88,8 @@ const server = http.createServer(app);
 const io = socketIo(server, {
     cors: {
         origin: [
-            "https://tradesesioncom.netlify.app/",
-            "https://tradesesioncom.netlify.app/", 
-            "https://tradesesioncom.netlify.app/",
+            "https://tradesesioncom.netlify.app",
+            "https://www.tradesesioncom.netlify.app", 
             "http://localhost:3000", 
             "http://127.0.0.1:5500", 
             "http://localhost:5500"
@@ -114,7 +113,7 @@ app.use(helmet({
 // ✅ ENHANCED CORS CONFIGURATION
 app.use(cors({
     origin: [
-        "https://tradesesioncom.netlify.app/",
+        "https://tradesesioncom.netlify.app",
         "https://tstradestation-backend-production.up.railway.app",
         "http://localhost:3000", 
         "http://127.0.0.1:5500", 
@@ -221,7 +220,7 @@ app.use('/api/login', (req, res, next) => {
 // ✅ TAMBAHKAN MIDDLEWARE CORS MANUAL UNTUK HANDLE PREFLIGHT
 app.use((req, res, next) => {
     const allowedOrigins = [
-        "https://tradesesioncom.netlify.app/",
+        "https://tradesesioncom.netlify.app",
         "http://localhost:3000", 
         "http://127.0.0.1:5500", 
         "http://localhost:5500"
@@ -2090,7 +2089,7 @@ app.post('/api/admin/contracts/generate', authenticateToken, requireAdmin, async
         );
         
         // Generate access link
-        const contractLink = `${process.env.FRONTEND_URL || 'https://tradesesioncom.netlify.app/'}/contract/${accessToken}`;
+        const contractLink = `${process.env.FRONTEND_URL || 'https://tradesesioncom.netlify.app'}/contract/${accessToken}`;
         
         res.status(201).json({
             success: true,
